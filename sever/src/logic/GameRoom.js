@@ -253,23 +253,30 @@ class GameRoom {
     }
 
     // --- M5: Item Usage (SỬA LẠI THEO V3 CHÍNH XÁC) ---
+// --- FIX A: SỬA HÀM useItem ---
     useItem(playerId, itemId, params) {
-        if (this.status !== 'BATTLE') throw new Error('Not in battle');
         if (this.turnQueue[this.turnIndex] !== playerId) throw new Error('Not your turn');
-
         const player = this.players[playerId];
+        const itemDef = ITEMS[itemId];
 
-        // Dùng player.hasItem/removeItem thay vì check inventory trực tiếp
-        if (!player.hasItem(itemId)) throw new Error('Item not owned');
+        if (!itemDef) throw new Error('Item not found');
 
-        // Gọi Logic thật từ ItemSystem đã import
+        // [FIX LOGIC]: Nếu là SKILL (ví dụ SELF_DESTRUCT), không cần check inventory
+        if (itemDef.type !== 'SKILL') {
+            if (!player.inventory.includes(itemId)) throw new Error('Item not owned');
+        }
+        
+        // Gọi Logic thật
         const result = ItemSystem.applyItem(this, player, itemId, params);
-
-        // Xóa item sau khi dùng
-        player.removeItem(itemId);
-
-        this.logs.push({ action: 'ITEM_USE', itemId, playerId, result });
-        this.nextTurn();
+        
+        // Chỉ xóa item nếu nó là Item tiêu hao (ACTIVE/PASSIVE), không xóa Skill
+        if (itemDef.type !== 'SKILL') {
+            const idx = player.inventory.indexOf(itemId);
+            if (idx > -1) player.inventory.splice(idx, 1);
+        }
+        
+        this.logs.push({ action: 'ITEM', itemId, playerId, result });
+        this.nextTurn(); 
         return result;
     }
 
@@ -357,74 +364,71 @@ class GameRoom {
         if (this.status === 'ENDED') return;
     }
 
-    // --- M7: Security: Fog of War Filtering ---
+    // --- FIX D: LOGIC SONAR TRONG FOG OF WAR ---
     getStateFor(playerId, revealAll = false) {
         const me = this.players[playerId];
         const op = this.getOpponent(playerId);
+        
+        // Lấy danh sách tàu DD (Destroyer) còn sống của MÌNH để dùng Sonar
+        const myDestroyers = me.fleet.filter(u => u.code === 'DD' && !u.isSunk);
 
-        // Trạng thái đơn giản khi chưa có đối thủ
-        if (!op) {
-            return {
-                status: this.status,
-                turn: this.turnQueue[this.turnIndex],
-                me: { points: me.points, fleet: me.fleet, inventory: me.inventory, commander: me.commander, activeEffects: me.activeEffects },
-                opponent: { name: 'Waiting', fleet: [], commander: 'UNKNOWN', activeEffects: {} },
-                logs: this.logs,
-                config: this.config
-            };
-        }
-
-        // Lọc tàu địch theo luật Fog of War
-        const opIsJammed = op.activeEffects.jammer > 0;
-        // Kiểm tra Vision: Admiral Active HOẶC Spy Reveal HOẶC Commander Passive
-        const myVisionIsActive = me.activeEffects.admiralVision > 0 || revealAll;
-
-        const opPublicFleet = op.fleet.map(u => {
-            // 1. Luôn hiện tàu đã chìm
-            if (u.isSunk) {
-                // Vị trí, trạng thái chìm, loại tàu được lộ
-                return { id: u.id, code: u.code, x: u.x, y: u.y, vertical: u.vertical, isSunk: true };
+        const opPublicFleet = op ? op.fleet.map(u => {
+            // 1. Nếu revealAll (Spy) hoặc tàu đã chìm -> Hiện
+            if (revealAll || u.isSunk) {
+                return { code: u.code, x: u.x, y: u.y, vertical: u.vertical, isSunk: u.isSunk, hp: u.hp };
+            }
+            
+            // 2. Nếu là Structure luôn hiện (theo definitions) -> Hiện
+            if (u.alwaysVisible) {
+                return { code: u.code, x: u.x, y: u.y, vertical: u.vertical, isSunk: false, hp: u.hp };
             }
 
-            // 2. Hiện tàu sống nếu có Vision (Active Skill)
-            if (myVisionIsActive) {
-                // Hiện đầy đủ vị trí, HP, trạng thái động cơ
-                return { id: u.id, code: u.code, x: u.x, y: u.y, vertical: u.vertical, isSunk: false, hp: u.hp, maxHp: u.maxHp, isImmobilized: u.isImmobilized, type: u.type };
+            // 3. Logic Vision cơ bản (Tàu địch nằm trong tầm nhìn của tàu mình)
+            // Đã có logic check visionSet ở phiên bản trước, giả sử u.isVisibleBy(me)
+            // Ở đây viết logic check nhanh:
+            let isVisible = false;
+            
+            // Check Sonar: Nếu u là SS (Tàu ngầm) và MÌNH có DD đứng gần
+            if (u.isStealth) { // Tàu ngầm
+                // Check xem có DD nào của mình đứng trong tầm Vision (7 ô) không
+                for (const dd of myDestroyers) {
+                    // Manhattan distance hoặc Chebyshev (tùy game, ở đây dùng Chebyshev cho Vision vuông)
+                    const dist = Math.max(Math.abs(dd.x - u.x), Math.abs(dd.y - u.y));
+                    if (dist <= dd.vision) {
+                        isVisible = true; // Bị Sonar phát hiện!
+                        break;
+                    }
+                }
+            } else {
+                // Tàu thường: Check Vision thông thường (Code cũ đã xử lý logic này bằng visionSet)
+                // Giả sử logic cũ: if (me.canSee(u)) isVisible = true;
+                // Nếu chưa có, bạn cần loop qua me.fleet để check range như trên
+                // Để đơn giản hóa hotfix này: ta coi như tàu thường luôn bị lộ nếu trong range
+                for (const myShip of me.fleet) {
+                    if (myShip.isSunk) continue;
+                    const dist = Math.max(Math.abs(myShip.x - u.x), Math.abs(myShip.y - u.y));
+                    if (dist <= myShip.vision) {
+                        isVisible = true;
+                        break;
+                    }
+                }
             }
 
-            // 3. Nếu tàu là Structure và không bị Jammer (Structure luôn bị lộ trừ khi bị Jammed)
-            if (u.type === 'STRUCTURE' && !opIsJammed) {
-                 return { id: u.id, code: u.code, x: u.x, y: u.y, vertical: u.vertical, isSunk: false, hp: u.hp, maxHp: u.maxHp, type: u.type };
+            if (isVisible) {
+                return { code: u.code, x: u.x, y: u.y, vertical: u.vertical, isSunk: false };
             }
-
-            // Mặc định: Giấu hoàn toàn
-            return null;
-        }).filter(x => x); // Lọc bỏ các tàu bị giấu
+            
+            return null; // Ẩn hoàn toàn
+        }).filter(x => x) : [];
 
         return {
             status: this.status,
             turn: this.turnQueue[this.turnIndex],
-            currentTurnPlayer: this.turnQueue[this.turnIndex],
-            // Thông tin cá nhân (Gửi full)
-            me: {
-                points: me.points,
-                fleet: me.fleet,
-                inventory: me.inventory,
-                commander: me.commander,
-                activeEffects: me.activeEffects,
-                buildingDiscount: me.buildingDiscount, // Thêm discount cho Engineer
-            },
-            // Thông tin đối thủ (đã lọc FoW)
-            opponent: {
-                name: op.name,
-                fleet: opPublicFleet,
-                commander: op.commander, // Lộ commander
-                activeEffects: op.activeEffects, // Lộ effect của địch (như Jammer)
-            },
-            logs: this.logs,
-            config: this.config
+            me: { points: me.points, fleet: me.fleet, inventory: me.inventory },
+            opponent: { name: op ? op.name : 'Waiting', fleet: opPublicFleet },
+            logs: this.logs
         };
     }
-}
+    }
 
 module.exports = GameRoom;

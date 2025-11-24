@@ -151,42 +151,37 @@ module.exports = (io) => {
             }
         });
 
-        // 4. Activate Skill (Cập nhật logic Spy Skill từ v3)
         socket.on('activate_skill', ({ roomId }) => {
             const room = rooms[roomId];
-            const player = room?.players[socket.id];
-            if (!room || !player) return socket.emit('error', 'Room or player not found');
-
+            if (!room) return;
+            const player = room.players[socket.id];
+            
             try {
-                // Giả định CommanderSystem.activateSkill xử lý logic skill và gọi nextTurn nếu cần
                 const result = CommanderSystem.activateSkill(room, player);
                 
-                // Xử lý trường hợp đặc biệt: SPY Skill cần tiết lộ bản đồ tạm thời
                 if (result.type === 'SKILL_SPY') {
-                    // Lấy state cơ bản (chỉ người chơi Spy cần)
-                    const secretState = room.getStateFor(socket.id);
-                    const opponent = room.getOpponent(socket.id);
-
-                    if (opponent) {
-                        // FIX 5 (từ v3): Gán toàn bộ fleet của địch vào state của người chơi Spy
-                        secretState.opponent.fleet = opponent.fleet;
-                        secretState.isTempReveal = true; // Flag cho Client biết đây là reveal tạm thời
-                        
-                        // Gửi state đặc biệt chỉ cho người chơi Spy
-                        socket.emit('game_state', secretState);
-                        
-                        // Thông báo cho địch biết (Quan trọng cho gameplay)
-                        io.to(opponent.id).emit('effect_trigger', { 
-                            type: 'ENEMY_USED_SPY',
-                            message: `${player.name} activated a Spy Skill. Your fleet is exposed!`
-                        });
-                        io.to(roomId).emit('room_log', `${player.name} activated a hidden skill.`);
-                    }
+                    // 1. Gửi bản đồ FULL (Lộ diện)
+                    socket.emit('game_state', room.getStateFor(socket.id, true)); 
                     
+                    // Thông báo visual effect
+                    io.to(roomId).emit('effect_trigger', { type: 'SPY_REVEAL', playerId: socket.id });
+
+                    // [FIX C]: TỰ ĐỘNG TẮT SAU 2 GIÂY
+                    setTimeout(() => {
+                        // Kiểm tra xem user còn kết nối/room còn tồn tại không để tránh crash
+                        if (rooms[roomId] && rooms[roomId].players[socket.id]) {
+                            // Gửi lại bản đồ FOG OF WAR (Che đi)
+                            // false = không revealAll
+                            socket.emit('game_state', room.getStateFor(socket.id, false));
+                        }
+                    }, 2000);
+
                 } else {
-                    // Skill thường (Admiral, Engineer, v.v.)
                     io.to(roomId).emit('effect_trigger', { ...result, playerId: socket.id });
-                    syncRoom(io, room);
+                    // Sync bình thường
+                    Object.keys(room.players).forEach(pid => {
+                        io.to(pid).emit('game_state', room.getStateFor(pid));
+                    });
                 }
             } catch (e) {
                 socket.emit('error', e.message);

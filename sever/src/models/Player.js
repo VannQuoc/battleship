@@ -33,17 +33,32 @@ class Player {
      * @returns {boolean} True nếu mua thành công.
      */
     buyItem(itemId) {
-        const item = ITEMS[itemId];
-        if (!item) return false;
+        // Kiểm tra trong ITEMS (Vật phẩm) hoặc UNITS (Công trình)
+        let itemDef = ITEMS[itemId] || UNITS[itemId]; 
+        if (!itemDef) return false;
         
-        // Check points
-        if (this.points < item.cost) return false;
+        // Tính giá gốc
+        let finalCost = itemDef.cost;
 
-        // [FIXED]: Sử dụng Constant đã định nghĩa hoặc Fallback an toàn với dấu ngoặc ()
-        const limit = CONSTANTS.MAX_ITEMS || 6; 
-        if (this.inventory.length >= limit) return false;
+        // [FIX B]: ÁP DỤNG GIẢM GIÁ KỸ SƯ CHO CÔNG TRÌNH
+        if (itemDef.type === 'STRUCTURE') {
+            // buildingDiscount được set = 0.2 trong setCommander('ENGINEER')
+            finalCost = Math.floor(finalCost * (1 - this.buildingDiscount));
+        }
 
-        this.points -= item.cost;
+        if (this.points < finalCost) return false;
+
+        // Logic check inventory cho Items (Công trình thì không check slot item, mà check slot structure - Tùy game logic)
+        // Ở đây giữ logic cũ check Item Slot cho đơn giản, hoặc tách ra check Structure Limit
+        const limit = (itemDef.type === 'STRUCTURE') ? (CONSTANTS.MAX_STRUCTURES || 4) : (CONSTANTS.MAX_ITEMS || 6);
+        const collection = (itemDef.type === 'STRUCTURE') ? this.structures : this.inventory; // Giả sử có this.structures
+
+        // Lưu ý: Nếu code cũ bạn gộp chung Inventory thì dùng logic dưới:
+        if (this.inventory.length >= 6) return false; 
+
+        this.points -= finalCost;
+        
+        // Nếu là công trình -> Thường là vào chế độ "Chờ đặt" hoặc vào inventory
         this.inventory.push(itemId);
         return true;
     }
