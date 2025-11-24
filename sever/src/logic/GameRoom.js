@@ -154,82 +154,90 @@ class GameRoom {
         }
     }
 
-        // [FIX 3B]: NÂNG CẤP HÀM isOccupied (Thêm excludeUnitId)
-        isOccupied(x, y, excludeUnitId = null) {
-            for(const pid in this.players) {
-                for(const u of this.players[pid].fleet) {
-                    // Bỏ qua tàu đã chìm (nếu game cho phép đi qua xác tàu - GDD bảo xác tàu là chướng ngại vật -> OK giữ nguyên)
-                    // Bỏ qua chính tàu đang di chuyển (để tránh tự block mình khi overlap vị trí cũ)
-                    if (u.id === excludeUnitId) continue;
-
+    // [FIX 3B]: NÂNG CẤP HÀM isOccupied (Thêm excludeUnitId)
+    isOccupied(x, y, excludeUnitId = null) {
+        for(const pid in this.players) {
+            for(const u of this.players[pid].fleet) {
+                // Bỏ qua tàu đã chìm (nếu game cho phép đi qua xác tàu - GDD bảo xác tàu là chướng ngại vật -> OK giữ nguyên)
+                // Bỏ qua chính tàu đang di chuyển (để tránh tự block mình khi overlap vị trí cũ)
+                if (u.id === excludeUnitId) continue;
                     if (u.occupies(x, y)) return true;
-                }
             }
-            return false;
         }
+        return false;
+    }
 
-        // [FIX 3A]: CẬP NHẬT HÀM moveUnit CHECK TOÀN BỘ THÂN TÀU
-        moveUnit(playerId, unitId, newX, newY) {
-        if (this.status !== 'BATTLE') throw new Error('Not in battle');
-        if (this.turnQueue[this.turnIndex] !== playerId) throw new Error('Not your turn');
+    // [FIX 3A]: CẬP NHẬT HÀM moveUnit CHECK TOÀN BỘ THÂN TÀU
+    moveUnit(playerId, unitId, newX, newY) {
+    if (this.status !== 'BATTLE') throw new Error('Not in battle');
+    if (this.turnQueue[this.turnIndex] !== playerId) throw new Error('Not your turn');
 
-        const player = this.players[playerId];
-        const unit = player.fleet.find(u => u.id === unitId);
+    const player = this.players[playerId];
+    const unit = player.fleet.find(u => u.id === unitId);
 
-        // Validate
-        if (!unit || unit.isSunk) throw new Error('Invalid Unit');
-        if (unit.isImmobilized) throw new Error('Unit engine broken');
-        if (unit.type === 'STRUCTURE') throw new Error('Structures cannot move');
+    // Validate
+    if (!unit || unit.isSunk) throw new Error('Invalid Unit');
+    if (unit.isImmobilized) throw new Error('Unit engine broken');
+    if (unit.type === 'STRUCTURE') throw new Error('Structures cannot move');
 
-        // Check range (Manhattan distance)
-        const dist = Math.abs(newX - unit.x) + Math.abs(newY - unit.y);
-        if (dist > unit.moveRange) throw new Error('Out of range');
+    // Check range (Manhattan distance)
+    const dist = Math.abs(newX - unit.x) + Math.abs(newY - unit.y);
+    if (dist > unit.moveRange) throw new Error('Out of range');
 
-        // VALIDATE COLLISION (Check toàn bộ thân tàu tại vị trí mới)
-            const size = unit.definition.size; // Lấy size từ config gốc hoặc unit.cells.length
+    // VALIDATE COLLISION (Check toàn bộ thân tàu tại vị trí mới)
+        const size = unit.definition.size; // Lấy size từ config gốc hoặc unit.cells.length
             
-            for(let i = 0; i < size; i++) {
-                // Tính tọa độ từng ô dự kiến
-                const cx = unit.vertical ? newX : newX + i;
-                const cy = unit.vertical ? newY + i : newY;
+        for(let i = 0; i < size; i++) {
+            // Tính tọa độ từng ô dự kiến
+            const cx = unit.vertical ? newX : newX + i;
+            const cy = unit.vertical ? newY + i : newY;
 
-                // 1. Check biên bản đồ (Boundary)
-                if (cx >= this.config.mapSize || cy >= this.config.mapSize) throw new Error('Out of bounds');
+            // 1. Check biên bản đồ (Boundary)
+            if (cx >= this.config.mapSize || cy >= this.config.mapSize) throw new Error('Out of bounds');
 
-                // 2. Check va chạm (QUAN TRỌNG: Loại trừ chính tàu này ra)
-                if (this.isOccupied(cx, cy, unit.id)) {
-                    throw new Error(`Destination blocked at ${cx},${cy}`);
-                }
+            // 2. Check va chạm (QUAN TRỌNG: Loại trừ chính tàu này ra)
+            if (this.isOccupied(cx, cy, unit.id)) {
+                throw new Error(`Destination blocked at ${cx},${cy}`);
             }
-            
-            // Nếu OK hết thì mới update
-            unit.updateCells(newX, newY, unit.vertical);
-            
-            this.logs.push({ action: 'MOVE', playerId, unitId, from: {x:unit.x, y:unit.y}, to: {x:newX, y:newY} });
-            this.nextTurn();
-            return { success: true };
         }
+            
+        // Nếu OK hết thì mới update
+        unit.updateCells(newX, newY, unit.vertical);
+            
+        this.logs.push({ action: 'MOVE', playerId, unitId, from: {x:unit.x, y:unit.y}, to: {x:newX, y:newY} });
+        this.nextTurn();
+        return { success: true };
+    }
 
-    // Hàm teleport cho ItemSystem sử dụng
+    // [FIX 1]: CẬP NHẬT HÀM teleportUnit CHECK VA CHẠM TOÀN THÂN TÀU
     teleportUnit(playerId, unitId, x, y) {
         const player = this.players[playerId];
         if (!player) throw new Error('Player not found');
-
+        
         const unit = player.fleet.find(u => u.id === unitId);
-        if (!unit || unit.isSunk) throw new Error('Invalid Unit or already sunk');
+        if (!unit || unit.isSunk) throw new Error('Invalid Unit');
 
-        // Validate vị trí (bao gồm out of bounds)
-        if (x < 0 || y < 0 || x >= this.config.mapSize || y >= this.config.mapSize) throw new Error('Out of bounds');
-        // Vẫn phải check va chạm đè lên tàu khác (Tàu chỉ có thể teleport lên ô trống)
-        // Lưu ý: isOccupied kiểm tra 1 ô, nếu tàu lớn hơn 1 ô thì cần check toàn bộ hitbox mới, nhưng vì đây là teleport, ta giả định x,y là cell đầu tiên và check 1 ô.
-        if(this.isOccupied(x, y)) throw new Error('Destination blocked');
+        // Validate Boundary & Collision cho TOÀN BỘ thân tàu
+        const size = unit.definition.size;
+        
+        for(let i = 0; i < size; i++) {
+            const cx = unit.vertical ? x : x + i;
+            const cy = unit.vertical ? y + i : y;
 
-        const oldX = unit.x;
-        const oldY = unit.y;
+            // 1. Check biên bản đồ
+            if (cx >= this.config.mapSize || cy >= this.config.mapSize) throw new Error('Out of bounds');
 
+            // 2. Check va chạm (Trừ chính nó ra)
+            if (this.isOccupied(cx, cy, unit.id)) {
+                throw new Error(`Teleport destination blocked at ${cx},${cy}`);
+            }
+        }
+        
         // Update tọa độ và hitbox
         unit.updateCells(x, y, unit.vertical);
-        this.logs.push({ action: 'TELEPORT', playerId, unitId, from: {x:oldX, y:oldY}, to: {x, y} });
+        
+        // Log lại
+        this.logs.push({ action: 'TELEPORT', playerId, unitId, to: {x, y} });
     }
 
     // --- M4: Battle Loop: Fire Shot ---
@@ -316,23 +324,25 @@ class GameRoom {
         return result;
     }
 
-    // --- M6: Turn Cycle & Passive Effects ---
+    // [FIX 3]: LOGIC TRỪ TURN HIỆU ỨNG
     nextTurn() {
         this.turnIndex = (this.turnIndex + 1) % this.turnQueue.length;
         const currentPlayerId = this.turnQueue[this.turnIndex];
         const player = this.players[currentPlayerId];
 
-        this.logs.push({ type: 'NEW_TURN', playerId: currentPlayerId });
-
-        // 1. Giảm hiệu ứng Active (jammer, admiralVision)
+        // Trừ hiệu ứng Player
         if (player.activeEffects.jammer > 0) player.activeEffects.jammer--;
         if (player.activeEffects.admiralVision > 0) player.activeEffects.admiralVision--;
 
-        // 2. Xử lý Structures Passive
+        // Loop qua Fleet để xử lý Passive & Status Unit
         player.fleet.forEach(u => {
-            if (u.isSunk || u.type !== 'STRUCTURE') return;
+        // [FIX 3]: TRỪ LƯỢT LỘ DIỆN (Của Engine Boost)
+        if (u.revealedTurns > 0) {
+            u.revealedTurns--;
+        }
 
-            u.turnCounter++;
+        if (u.isSunk || u.type !== 'STRUCTURE') return;
+        u.turnCounter++;
 
             // SUPPLY: Hồi máu AOE 
             if (u.code === 'SUPPLY') {
@@ -400,45 +410,48 @@ class GameRoom {
         if (this.status === 'ENDED') return;
     }
 
-    // --- FIX D: LOGIC SONAR TRONG FOG OF WAR ---
+    // [FIX 2 & 3]: CẬP NHẬT LOGIC TẦM NHÌN VÀ LỘ DIỆN
     getStateFor(playerId, revealAll = false) {
         const me = this.players[playerId];
         const op = this.getOpponent(playerId);
         
-        // Lấy danh sách tàu DD (Destroyer) còn sống của MÌNH để dùng Sonar
+        // [FIX 2]: TÍNH BONUS VISION TỪ SKILL ADMIRAL
+        const visionBonus = me.activeEffects.admiralVision > 0 ? 2 : 0; // Cộng thêm 2 ô tầm nhìn
+
         const myDestroyers = me.fleet.filter(u => u.code === 'DD' && !u.isSunk);
 
         const opPublicFleet = op ? op.fleet.map(u => {
-            // 1. Nếu revealAll (Spy) hoặc tàu đã chìm -> Hiện
-            if (revealAll || u.isSunk) {
-                return { code: u.code, x: u.x, y: u.y, vertical: u.vertical, isSunk: u.isSunk, hp: u.hp };
+            // 1. Các trường hợp LUÔN HIỆN:
+            // - Spy Skill (revealAll)
+            // - Tàu đã chìm
+            // - Structure (alwaysVisible - VD: Nhà máy hạt nhân)
+            // - [FIX 3]: Tàu bị lộ diện do Engine Boost/Jammer hết hạn (revealedTurns > 0)
+            if (revealAll || u.isSunk || u.alwaysVisible || u.revealedTurns > 0) {
+                return { code: u.code, x: u.x, y: u.y, vertical: u.vertical, isSunk: u.isSunk, hp: u.hp, isRevealed: u.revealedTurns > 0 };
             }
             
-            // 2. Nếu là Structure luôn hiện (theo definitions) -> Hiện
-            if (u.alwaysVisible) {
-                return { code: u.code, x: u.x, y: u.y, vertical: u.vertical, isSunk: false, hp: u.hp };
-            }
-
-            // 3. Logic Vision cơ bản (Tàu địch nằm trong tầm nhìn của tàu mình)
+            // 2. Logic Vision & Sonar
             let isVisible = false;
             
-            // Check Sonar: Nếu u là SS (Tàu ngầm) và MÌNH có DD đứng gần
-            if (u.isStealth) { // Tàu ngầm
-                // Check xem có DD nào của mình đứng trong tầm Vision (7 ô) không
+            if (u.isStealth) { // Tàu ngầm (SS)
+                // Chỉ bị lộ bởi DD (Sonar)
                 for (const dd of myDestroyers) {
-                    // Chebyshev distance (vision vuông)
                     const dist = Math.max(Math.abs(dd.x - u.x), Math.abs(dd.y - u.y));
-                    if (dist <= dd.vision) {
-                        isVisible = true; // Bị Sonar phát hiện!
+                    // Sonar cũng được hưởng buff Admiral (Logic game) hoặc không (Tùy GDD). 
+                    // Ở đây giả sử Admiral buff toàn bộ cảm biến -> Buff cả Sonar.
+                    if (dist <= dd.vision + visionBonus) {
+                        isVisible = true;
                         break;
                     }
                 }
             } else {
-                // Tàu thường: Check Vision thông thường 
+                // Tàu mặt nước: Check Vision thông thường
                 for (const myShip of me.fleet) {
                     if (myShip.isSunk) continue;
                     const dist = Math.max(Math.abs(myShip.x - u.x), Math.abs(myShip.y - u.y));
-                    if (dist <= myShip.vision) {
+                    
+                    // [FIX 2]: ÁP DỤNG VISION BONUS
+                    if (dist <= myShip.vision + visionBonus) {
                         isVisible = true;
                         break;
                     }
@@ -446,29 +459,17 @@ class GameRoom {
             }
 
             if (isVisible) {
-                // Chỉ hiện các thông tin cơ bản
                 return { code: u.code, x: u.x, y: u.y, vertical: u.vertical, isSunk: false };
             }
             
-            return null; // Ẩn hoàn toàn
+            return null; // Ẩn
         }).filter(x => x) : [];
 
-        // Trả về state cần thiết cho người chơi
         return {
             status: this.status,
             turn: this.turnQueue[this.turnIndex],
-            me: { 
-                points: me.points, 
-                fleet: me.fleet, 
-                inventory: me.inventory, 
-                activeEffects: me.activeEffects,
-                commander: me.commander,
-                buildingDiscount: me.buildingDiscount // Hiện discount cho client biết
-            },
-            opponent: { 
-                name: op ? op.name : 'Waiting', 
-                fleet: opPublicFleet 
-            },
+            me: { points: me.points, fleet: me.fleet, inventory: me.inventory, activeEffects: me.activeEffects }, // Gửi thêm activeEffects để Client biết đường vẽ UI buff
+            opponent: { name: op ? op.name : 'Waiting', fleet: opPublicFleet },
             logs: this.logs
         };
     }
