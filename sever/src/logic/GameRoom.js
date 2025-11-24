@@ -281,133 +281,166 @@ class GameRoom {
             }
         }
 
-        this.logs.push({ action: 'SHOT', attacker: attackerId, x, y, result: hitResult });
+        this.logs.push({ turn: this.logs.length, attacker: attackerId, x, y, result: hitResult });
 
-        // 3. Check Win
-        // FIX: Chỉ tính tàu (type='SHIP') còn lại. Bỏ qua Structures.
-        const remainingShips = defender.fleet.filter(u => u.type === 'SHIP' && !u.isSunk);
-
-        if (remainingShips.length === 0) {
-            this.status = 'ENDED';
-            this.logs.push({ type: 'GAME_END', winner: attackerId });
-            return { result: hitResult, sunkShip, winner: attackerId };
+        // [FIX 2]: DÙNG HÀM CHECK WIN CHUNG
+        if (this.checkWinCondition()) {
+            return { result: hitResult, sunkShip, winner: this.winner };
         }
 
         this.nextTurn();
         return { result: hitResult, sunkShip };
     }
+    // ---------------------------------------------------------
+    // 1. HÀM KIỂM TRA ĐIỀU KIỆN THẮNG (HELPER)
+    // ---------------------------------------------------------
+    checkWinCondition() {
+        // Duyệt qua tất cả người chơi
+        for (const playerId in this.players) {
+            const player = this.players[playerId];
+            
+            // Điều kiện bại trận: Hết sạch TÀU (Không tính Structure)
+            const remainingShips = player.fleet.filter(u => u.type === 'SHIP' && !u.isSunk);
+            
+            if (remainingShips.length === 0) {
+                this.status = 'ENDED';
+                // Người thắng là đối thủ của người vừa thua
+                this.winner = this.getOpponent(playerId).id; 
+                return true; // Game đã kết thúc
+            }
+        }
+        return false; // Game chưa kết thúc
+    }
 
-    // --- M5: Item Usage (FIXED: Không tiêu hao SKILL) ---
+    // ---------------------------------------------------------
+    // 2. HÀM USE ITEM (XỬ LÝ KỸ NĂNG & VẬT PHẨM)
+    // ---------------------------------------------------------
     useItem(playerId, itemId, params) {
+        // 1. Validate lượt
+        if (this.status !== 'BATTLE') throw new Error('Game not in battle phase');
         if (this.turnQueue[this.turnIndex] !== playerId) throw new Error('Not your turn');
+        
         const player = this.players[playerId];
-        const itemDef = ITEMS[itemId];
+        const itemDef = ITEMS[itemId]; // Đảm bảo đã import ITEMS từ definitions
 
-        if (!itemDef) throw new Error('Item not found');
+        if (!itemDef) throw new Error('Item definition not found');
 
-        // [FIX A]: Nếu là SKILL (ví dụ SELF_DESTRUCT), không cần check inventory
+        // 2. Validate sở hữu (Trừ trường hợp là Skill Tướng/Unit)
         if (itemDef.type !== 'SKILL') {
             if (!player.inventory.includes(itemId)) throw new Error('Item not owned');
         }
         
-        // Gọi Logic thật (Giả định ItemSystem được truyền GameRoom object)
+        // 3. Thực thi Logic (Gọi sang ItemSystem)
+        // Lưu ý: ItemSystem.applyItem sẽ gọi các hàm như teleportUnit, takeDamage...
         const result = ItemSystem.applyItem(this, player, itemId, params);
         
-        // Chỉ xóa item nếu nó là Item tiêu hao (ACTIVE/PASSIVE), không xóa Skill
+        // 4. Xóa item sau khi dùng (Nếu không phải Skill)
         if (itemDef.type !== 'SKILL') {
             const idx = player.inventory.indexOf(itemId);
             if (idx > -1) player.inventory.splice(idx, 1);
         }
         
+        // 5. Ghi log
         this.logs.push({ action: 'ITEM', itemId, playerId, result });
+
+        // 6. [QUAN TRỌNG] Kiểm tra thắng thua ngay lập tức
+        // (Vì Nuke, Suicide Squad có thể đã diệt tàu cuối cùng)
+        if (this.checkWinCondition()) {
+            return { ...result, winner: this.winner, gameEnded: true };
+        }
+
+        // 7. Chuyển lượt (Dùng item tốn 1 lượt)
         this.nextTurn(); 
         return result;
     }
 
-    // [FIX 3]: LOGIC TRỪ TURN HIỆU ỨNG
+    // ---------------------------------------------------------
+    // 3. HÀM NEXT TURN (VÒNG LẶP XỬ LÝ PASSIVE & EVENT)
+    // ---------------------------------------------------------
     nextTurn() {
+        // 1. Chuyển lượt
         this.turnIndex = (this.turnIndex + 1) % this.turnQueue.length;
         const currentPlayerId = this.turnQueue[this.turnIndex];
         const player = this.players[currentPlayerId];
 
-        // Trừ hiệu ứng Player
+        // 2. Trừ hiệu ứng Buff/Debuff của Player
         if (player.activeEffects.jammer > 0) player.activeEffects.jammer--;
         if (player.activeEffects.admiralVision > 0) player.activeEffects.admiralVision--;
 
-        // Loop qua Fleet để xử lý Passive & Status Unit
+        // 3. Vòng lặp xử lý từng Unit (Structure Passive & Status)
         player.fleet.forEach(u => {
-        // [FIX 3]: TRỪ LƯỢT LỘ DIỆN (Của Engine Boost)
+        // [FIX] Trừ lượt lộ diện (Do Engine Boost hoặc bị bắn)
         if (u.revealedTurns > 0) {
             u.revealedTurns--;
         }
 
         if (u.isSunk || u.type !== 'STRUCTURE') return;
-        u.turnCounter++;
+        
+        u.turnCounter++; // Tăng biến đếm lượt của công trình
 
-            // SUPPLY: Hồi máu AOE 
-            if (u.code === 'SUPPLY') {
-                const range = 1; 
-                player.fleet.forEach(friend => {
-                    if (!friend.isSunk && Math.abs(friend.x - u.x) <= range && Math.abs(friend.y - u.y) <= range) {
-
-                        // Lượng máu hồi và điều kiện sửa động cơ
-                        const maxHeal = 5;
-                        friend.hp = Math.min(friend.maxHp, friend.hp + maxHeal);
-
-                        // Nếu máu > Ngưỡng Crit (~50%) -> Hết hỏng động cơ
-                        if (friend.hp > friend.maxHp * (CONSTANTS.CRITICAL_THRESHOLD || 0.5)) {
-                            friend.isImmobilized = false;
-                        }
-                        this.logs.push({ action: 'HEAL', unitId: friend.id, amount: maxHeal });
-                    }
-                });
-            }
-
-            // NUCLEAR PLANT: Gen Item NUKE sau 10 lượt
-            if (u.code === 'NUCLEAR_PLANT' && u.turnCounter >= 10) {
-                const success = player.addItem('NUKE');
-                if (success) {
-                    u.turnCounter = 0; // Reset counter nếu thêm thành công
-                    this.logs.push({ action: 'ITEM_GEN', itemId: 'NUKE', playerId: player.id });
+        // --- LOGIC SUPPLY STATION (TRẠM TIẾP TẾ) ---
+        if (u.code === 'SUPPLY') {
+            const range = 1; // 3x3
+            player.fleet.forEach(friend => {
+            // Check khoảng cách
+            if (!friend.isSunk && Math.abs(friend.x - u.x) <= range && Math.abs(friend.y - u.y) <= range) {
+                // Hồi 5 HP (Theo GDD)
+                friend.hp = Math.min(friend.maxHp, friend.hp + 5);
+                
+                // Nếu máu > 50% -> Hết hỏng động cơ
+                if (friend.hp > friend.maxHp * CONSTANTS.CRITICAL_THRESHOLD) {
+                    friend.isImmobilized = false;
                 }
             }
+            });
+        }
 
-            // AIRFIELD: Gen Item DRONE sau 3 lượt
-            if (u.code === 'AIRFIELD' && u.turnCounter >= 3) {
-                const success = player.addItem('DRONE');
-                if (success) {
-                    u.turnCounter = 0;
-                    this.logs.push({ action: 'SPAWN', msg: 'Airfield launched a patrol drone', playerId: player.id });
-                }
+        // --- LOGIC NUCLEAR PLANT (NHÀ MÁY HẠT NHÂN) ---
+        if (u.code === 'NUCLEAR_PLANT' && u.turnCounter >= 10) {
+            // Dùng hàm addItem để check slot inventory an toàn
+            const added = player.addItem('NUKE');
+            if (added) {
+                u.turnCounter = 0; // Reset chỉ khi nhận được đồ
+                this.logs.push({ action: 'PASSIVE_GENERATE', playerId: player.id, item: 'NUKE' });
             }
+        }
+        
+        // --- LOGIC AIRFIELD (SÂN BAY) ---
+        if (u.code === 'AIRFIELD' && u.turnCounter >= 3) {
+            const added = player.addItem('DRONE');
+            if (added) {
+                u.turnCounter = 0;
+                this.logs.push({ action: 'PASSIVE_GENERATE', playerId: player.id, item: 'DRONE' });
+            }
+        }
         });
 
-        // 3. Xử lý Pending Events (Ám sát)
+        // 4. Xử lý các sự kiện chờ (Mercenary/Assassin)
+        // Filter trả về true để giữ lại, false để xóa đi
         this.pendingEvents = this.pendingEvents.filter(ev => {
-            // Chỉ xử lý event của người chơi đang đến lượt
-            if (ev.ownerId === currentPlayerId) {
-                ev.turnsLeft--;
-                if (ev.turnsLeft <= 0 && ev.type === 'ASSASSINATE') {
-                    const targetPlayer = this.getOpponent(ev.ownerId);
-                    const targetUnit = targetPlayer?.fleet.find(t => t.id === ev.targetId);
+        // Logic: Kiểm tra nếu sự kiện thuộc về người chơi hiện tại (hoặc logic đếm ngược chung)
+        // Ở đây giả sử đếm ngược vào đầu lượt của người thuê
+        if (ev.ownerId === currentPlayerId) {
+            ev.turnsLeft--;
+            
+            // Khi đếm ngược về 0 -> Kích hoạt Ám sát
+            if (ev.turnsLeft <= 0 && ev.type === 'ASSASSINATE') {
+                const targetPlayer = this.getOpponent(ev.ownerId);
+                const targetUnit = targetPlayer.fleet.find(t => t.id === ev.targetId);
+                
+                if (targetUnit && !targetUnit.isSunk) {
+                    targetUnit.takeDamage(999); // Instakill
+                    this.logs.push({ action: 'ASSASSINATION', targetId: ev.targetId });
 
-                    if (targetUnit && !targetUnit.isSunk) {
-                        targetUnit.takeDamage(999); // One-shot kill
-                        this.logs.push({ action: 'ASSASSINATION_COMPLETE', targetId: ev.targetId, targetPlayerId: targetPlayer.id });
-                        // Check Win sau khi ám sát
-                        const allSunk = targetPlayer.fleet.every(u => u.isSunk);
-                        if (allSunk) this.status = 'ENDED';
-                    } else {
-                        this.logs.push({ action: 'ASSASSINATION_FAIL', targetId: ev.targetId, reason: targetUnit ? 'Sunk' : 'Not Found' });
-                    }
-                    return false; // Remove event
+                    // [QUAN TRỌNG] Check Win sau khi Ám sát
+                    this.checkWinCondition(); 
+                    // Lưu ý: Nếu game end, status sẽ đổi sang ENDED, loop game sẽ dừng ở các check sau
                 }
+                return false; // Xóa event khỏi danh sách vì đã thực thi
             }
-            return true; // Keep event
+        }
+        return true; // Giữ lại event chưa đến hạn
         });
-
-        // Kiểm tra kết thúc game sau các passive
-        if (this.status === 'ENDED') return;
     }
 
     // [FIX 2 & 3]: CẬP NHẬT LOGIC TẦM NHÌN VÀ LỘ DIỆN
