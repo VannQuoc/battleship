@@ -7,14 +7,15 @@ const rooms = {};
 
 /**
  * Hàm gửi trạng thái game (đã lọc Fog of War) riêng biệt cho từng người chơi trong phòng.
+ * Mặc định luôn che giấu tàu địch.
  * @param {object} io Socket.IO Server instance
  * @param {GameRoom} room Instance của phòng game
  */
 function syncRoom(io, room) {
     if (!room) return;
+    // Gửi state đã lọc FoW riêng cho từng người chơi
     Object.keys(room.players).forEach(pid => {
-        // Gửi state đã lọc FoW riêng cho từng người chơi
-        // Tham số thứ hai (nếu có) thường dùng để bật/tắt reveal tạm thời (vd: Spy Skill)
+        // Mặc định gọi state chuẩn (Che giấu tàu địch)
         io.to(pid).emit('game_state', room.getStateFor(pid)); 
     });
 }
@@ -23,7 +24,7 @@ module.exports = (io) => {
     io.on('connection', (socket) => {
         console.log(`Client connected: ${socket.id}`);
 
-        // --- M1: Room & Join Logic (Từ v2) ---
+        // --- M1: Room & Join Logic ---
 
         // 1. Tạo Room với Config
         socket.on('create_room', ({ roomId, name, config = {} }) => {
@@ -57,7 +58,7 @@ module.exports = (io) => {
             }
         });
 
-        // --- M2: Setup & Deployment (Từ v1, bổ sung error handling) ---
+        // --- M2: Setup & Deployment ---
 
         socket.on('select_commander', ({ roomId, commanderId }) => {
             const room = rooms[roomId];
@@ -106,7 +107,7 @@ module.exports = (io) => {
 
         // --- M3: Battle Actions ---
 
-        // 1. Fire Shot (Từ v1, thêm try/catch)
+        // 1. Fire Shot
         socket.on('fire_shot', ({ roomId, x, y }) => {
             const room = rooms[roomId];
             if (room) {
@@ -121,7 +122,7 @@ module.exports = (io) => {
             }
         });
 
-        // 2. Move Unit (Từ v2)
+        // 2. Move Unit
         socket.on('move_unit', ({ roomId, unitId, x, y }) => {
             const room = rooms[roomId];
             if (room) {
@@ -135,7 +136,7 @@ module.exports = (io) => {
             }
         });
 
-        // 3. Use Item (Từ v1, đã hoàn thiện)
+        // 3. Use Item
         socket.on('use_item', ({ roomId, itemId, params }) => {
             const room = rooms[roomId];
             if(room) {
@@ -150,7 +151,7 @@ module.exports = (io) => {
             }
         });
 
-        // 4. Activate Skill (Từ v2)
+        // 4. Activate Skill (Cập nhật logic Spy Skill từ v3)
         socket.on('activate_skill', ({ roomId }) => {
             const room = rooms[roomId];
             const player = room?.players[socket.id];
@@ -162,10 +163,28 @@ module.exports = (io) => {
                 
                 // Xử lý trường hợp đặc biệt: SPY Skill cần tiết lộ bản đồ tạm thời
                 if (result.type === 'SKILL_SPY') {
-                    // Gửi state đặc biệt, ví dụ: truyền flag reveal tạm thời vào getStateFor
-                    socket.emit('game_state_reveal', room.getStateFor(socket.id, true)); 
-                    io.to(roomId).emit('room_log', `${player.name} activated a hidden skill.`);
+                    // Lấy state cơ bản (chỉ người chơi Spy cần)
+                    const secretState = room.getStateFor(socket.id);
+                    const opponent = room.getOpponent(socket.id);
+
+                    if (opponent) {
+                        // FIX 5 (từ v3): Gán toàn bộ fleet của địch vào state của người chơi Spy
+                        secretState.opponent.fleet = opponent.fleet;
+                        secretState.isTempReveal = true; // Flag cho Client biết đây là reveal tạm thời
+                        
+                        // Gửi state đặc biệt chỉ cho người chơi Spy
+                        socket.emit('game_state', secretState);
+                        
+                        // Thông báo cho địch biết (Quan trọng cho gameplay)
+                        io.to(opponent.id).emit('effect_trigger', { 
+                            type: 'ENEMY_USED_SPY',
+                            message: `${player.name} activated a Spy Skill. Your fleet is exposed!`
+                        });
+                        io.to(roomId).emit('room_log', `${player.name} activated a hidden skill.`);
+                    }
+                    
                 } else {
+                    // Skill thường (Admiral, Engineer, v.v.)
                     io.to(roomId).emit('effect_trigger', { ...result, playerId: socket.id });
                     syncRoom(io, room);
                 }
@@ -175,7 +194,7 @@ module.exports = (io) => {
         });
 
 
-        // --- M4: Disconnect (Từ v2) ---
+        // --- M4: Disconnect (Giữ nguyên logic kết thúc game khi có người thoát) ---
 
         socket.on('disconnect', () => {
             const socketId = socket.id;
@@ -189,7 +208,14 @@ module.exports = (io) => {
 
                     // Xử lý thua/dừng game
                     room.status = 'ENDED'; 
-                    io.to(rid).emit('game_over', { reason: `${playerName} disconnected`, winner: room.getOpponent(socketId)?.id });
+                    // Tìm đối thủ còn lại
+                    const winner = Object.values(room.players).find(p => p.id !== socketId);
+                    
+                    io.to(rid).emit('game_over', { 
+                        reason: `${playerName} disconnected.`, 
+                        winnerId: winner?.id,
+                        winnerName: winner?.name || 'Unknown'
+                    });
 
                     // Xóa room khỏi bộ nhớ
                     delete rooms[rid]; 
