@@ -4,8 +4,8 @@
 const Player = require('../models/Player');
 const Unit = require('../models/Unit');
 // Giả định ItemSystem và CommanderSystem đã được định nghĩa và export đúng cách
-const ItemSystem = require('./ItemSystem'); // SỬA: Import logic ItemSystem thật
-const CommanderSystem = require('./CommanderSystem'); // SỬA: Bổ sung Import CommanderSystem
+const ItemSystem = require('./ItemSystem');
+const CommanderSystem = require('./CommanderSystem');
 const { CONSTANTS, UNITS, ITEMS } = require('../config/definitions');
 
 
@@ -57,24 +57,41 @@ class GameRoom {
         return this.players[opId];
     }
 
-    // --- M2: Setup & Deployment ---
+    // --- M2: Setup & Deployment (Đã sửa lỗi Exploit: Validate quyền sở hữu Structure) ---
     deployFleet(playerId, shipsData) {
         if (this.status !== 'LOBBY' && this.status !== 'SETUP') throw new Error('Cannot deploy now');
 
         const player = this.players[playerId];
         const newFleet = [];
         const occupiedMap = new Set();
+        
+        // [FIX 1]: Clone inventory để check và trừ dần (tránh lỗi tham chiếu nếu deploy thất bại)
+        // Giả sử inventory chứa code: ['SILO', 'LIGHTHOUSE']
+        const tempInventory = [...player.inventory]; 
 
         // Reset fleet trước khi triển khai
         player.fleet = [];
 
         for (const s of shipsData) {
             const def = UNITS[s.code];
-            if (!def) continue;
+            if (!def) return false;
 
-            const size = def.size;
+            // --- LOGIC CHỐNG HACK (VALIDATE OWNERSHIP) ---
+            if (def.type === 'STRUCTURE') {
+                const index = tempInventory.indexOf(s.code);
+                if (index === -1) {
+                    console.log(`[CHEATING ATTEMPT] Player ${playerId} tried to deploy ${s.code} without owning it.`);
+                    // Nếu deploy thất bại, không cập nhật gì cả
+                    return false; // Hủy toàn bộ quá trình deploy
+                }
+                // Xóa khỏi tempInventory để tránh dùng 1 item đặt nhiều lần
+                tempInventory.splice(index, 1);
+            }
+            // ---------------------------------------------
 
             // 1. Check Boundary & Collision Self
+            const size = def.size;
+
             for(let i = 0; i < size; i++) {
                 const cx = s.vertical ? s.x : s.x + i;
                 const cy = s.vertical ? s.y + i : s.y;
@@ -96,9 +113,9 @@ class GameRoom {
                 playerId
             );
 
-            // Cập nhật Passive Commander (GIỮ NGUYÊN LOGIC V2 ĐỂ DUY TRÌ TÍNH ĐẦY ĐỦ)
-            // COMMANDER PASSIVE: ADMIRAL (+20% HP)
-            if (player.commander === 'ADMIRAL') {
+            // Cập nhật Passive Commander 
+            // COMMANDER PASSIVE: ADMIRAL (+20% HP cho tàu)
+            if (player.commander === 'ADMIRAL' && unit.type === 'SHIP') {
                 unit.maxHp = Math.floor(unit.maxHp * 1.2);
                 unit.hp = unit.maxHp;
             }
@@ -114,6 +131,9 @@ class GameRoom {
             newFleet.push(unit);
         }
 
+        // Nếu Deploy thành công, cập nhật lại inventory thật (đã trừ các công trình đã đặt)
+        player.inventory = tempInventory;
+        
         player.fleet = newFleet;
         player.ready = true;
 
@@ -168,7 +188,7 @@ class GameRoom {
         const oldX = unit.x;
         const oldY = unit.y;
 
-        // CẬP NHẬT TỌA ĐỘ VÀ HITBOX (Fix từ V3: Unit model phải có hàm updateCells)
+        // CẬP NHẬT TỌA ĐỘ VÀ HITBOX
         unit.updateCells(newX, newY, unit.vertical);
 
         this.logs.push({ action: 'MOVE', playerId, unitId, from: {x:oldX, y:oldY}, to: {x:newX, y:newY} });
@@ -187,6 +207,7 @@ class GameRoom {
         // Validate vị trí (bao gồm out of bounds)
         if (x < 0 || y < 0 || x >= this.config.mapSize || y >= this.config.mapSize) throw new Error('Out of bounds');
         // Vẫn phải check va chạm đè lên tàu khác (Tàu chỉ có thể teleport lên ô trống)
+        // Lưu ý: isOccupied kiểm tra 1 ô, nếu tàu lớn hơn 1 ô thì cần check toàn bộ hitbox mới, nhưng vì đây là teleport, ta giả định x,y là cell đầu tiên và check 1 ô.
         if(this.isOccupied(x, y)) throw new Error('Destination blocked');
 
         const oldX = unit.x;
@@ -241,8 +262,10 @@ class GameRoom {
         this.logs.push({ action: 'SHOT', attacker: attackerId, x, y, result: hitResult });
 
         // 3. Check Win
-        const allSunk = defender.fleet.every(u => u.isSunk);
-        if (allSunk) {
+        // FIX: Chỉ tính tàu (type='SHIP') còn lại. Bỏ qua Structures.
+        const remainingShips = defender.fleet.filter(u => u.type === 'SHIP' && !u.isSunk);
+
+        if (remainingShips.length === 0) {
             this.status = 'ENDED';
             this.logs.push({ type: 'GAME_END', winner: attackerId });
             return { result: hitResult, sunkShip, winner: attackerId };
@@ -252,8 +275,7 @@ class GameRoom {
         return { result: hitResult, sunkShip };
     }
 
-    // --- M5: Item Usage (SỬA LẠI THEO V3 CHÍNH XÁC) ---
-// --- FIX A: SỬA HÀM useItem ---
+    // --- M5: Item Usage (FIXED: Không tiêu hao SKILL) ---
     useItem(playerId, itemId, params) {
         if (this.turnQueue[this.turnIndex] !== playerId) throw new Error('Not your turn');
         const player = this.players[playerId];
@@ -261,12 +283,12 @@ class GameRoom {
 
         if (!itemDef) throw new Error('Item not found');
 
-        // [FIX LOGIC]: Nếu là SKILL (ví dụ SELF_DESTRUCT), không cần check inventory
+        // [FIX A]: Nếu là SKILL (ví dụ SELF_DESTRUCT), không cần check inventory
         if (itemDef.type !== 'SKILL') {
             if (!player.inventory.includes(itemId)) throw new Error('Item not owned');
         }
         
-        // Gọi Logic thật
+        // Gọi Logic thật (Giả định ItemSystem được truyền GameRoom object)
         const result = ItemSystem.applyItem(this, player, itemId, params);
         
         // Chỉ xóa item nếu nó là Item tiêu hao (ACTIVE/PASSIVE), không xóa Skill
@@ -298,13 +320,13 @@ class GameRoom {
 
             u.turnCounter++;
 
-            // SUPPLY: Hồi máu AOE (Logic V2 đã sửa lỗi V3)
+            // SUPPLY: Hồi máu AOE 
             if (u.code === 'SUPPLY') {
                 const range = 1; 
                 player.fleet.forEach(friend => {
                     if (!friend.isSunk && Math.abs(friend.x - u.x) <= range && Math.abs(friend.y - u.y) <= range) {
 
-                        // Lượng máu hồi và điều kiện sửa động cơ (Logic V2/V3)
+                        // Lượng máu hồi và điều kiện sửa động cơ
                         const maxHeal = 5;
                         friend.hp = Math.min(friend.maxHp, friend.hp + maxHeal);
 
@@ -384,15 +406,13 @@ class GameRoom {
             }
 
             // 3. Logic Vision cơ bản (Tàu địch nằm trong tầm nhìn của tàu mình)
-            // Đã có logic check visionSet ở phiên bản trước, giả sử u.isVisibleBy(me)
-            // Ở đây viết logic check nhanh:
             let isVisible = false;
             
             // Check Sonar: Nếu u là SS (Tàu ngầm) và MÌNH có DD đứng gần
             if (u.isStealth) { // Tàu ngầm
                 // Check xem có DD nào của mình đứng trong tầm Vision (7 ô) không
                 for (const dd of myDestroyers) {
-                    // Manhattan distance hoặc Chebyshev (tùy game, ở đây dùng Chebyshev cho Vision vuông)
+                    // Chebyshev distance (vision vuông)
                     const dist = Math.max(Math.abs(dd.x - u.x), Math.abs(dd.y - u.y));
                     if (dist <= dd.vision) {
                         isVisible = true; // Bị Sonar phát hiện!
@@ -400,10 +420,7 @@ class GameRoom {
                     }
                 }
             } else {
-                // Tàu thường: Check Vision thông thường (Code cũ đã xử lý logic này bằng visionSet)
-                // Giả sử logic cũ: if (me.canSee(u)) isVisible = true;
-                // Nếu chưa có, bạn cần loop qua me.fleet để check range như trên
-                // Để đơn giản hóa hotfix này: ta coi như tàu thường luôn bị lộ nếu trong range
+                // Tàu thường: Check Vision thông thường 
                 for (const myShip of me.fleet) {
                     if (myShip.isSunk) continue;
                     const dist = Math.max(Math.abs(myShip.x - u.x), Math.abs(myShip.y - u.y));
@@ -415,20 +432,32 @@ class GameRoom {
             }
 
             if (isVisible) {
+                // Chỉ hiện các thông tin cơ bản
                 return { code: u.code, x: u.x, y: u.y, vertical: u.vertical, isSunk: false };
             }
             
             return null; // Ẩn hoàn toàn
         }).filter(x => x) : [];
 
+        // Trả về state cần thiết cho người chơi
         return {
             status: this.status,
             turn: this.turnQueue[this.turnIndex],
-            me: { points: me.points, fleet: me.fleet, inventory: me.inventory },
-            opponent: { name: op ? op.name : 'Waiting', fleet: opPublicFleet },
+            me: { 
+                points: me.points, 
+                fleet: me.fleet, 
+                inventory: me.inventory, 
+                activeEffects: me.activeEffects,
+                commander: me.commander,
+                buildingDiscount: me.buildingDiscount // Hiện discount cho client biết
+            },
+            opponent: { 
+                name: op ? op.name : 'Waiting', 
+                fleet: opPublicFleet 
+            },
             logs: this.logs
         };
     }
-    }
+}
 
 module.exports = GameRoom;
