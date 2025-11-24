@@ -54,7 +54,7 @@ module.exports = {
                 }
                 break;
 
-            case 'ENGINE_BOOST': // Teleport 5 ô (Đã sửa: truyền ID thay vì đối tượng)
+            case 'ENGINE_BOOST': // Teleport 5 ô (Logic cập nhật từ v3)
                 {
                     const unit = player.fleet.find(u => u.id === params.unitId);
                     if (!unit || unit.isSunk) throw new Error('Invalid Unit');
@@ -63,8 +63,8 @@ module.exports = {
                     const dist = Math.abs(params.x - unit.x) + Math.abs(params.y - unit.y);
                     if (dist > 5) throw new Error('Boost range exceeded');
 
-                    // Sửa lỗi: Gọi hàm teleportUnit trong GameRoom, truyền ID người chơi và ID Unit
-                    gameRoom.teleportUnit(player.id, unit.id, params.x, params.y);
+                    // Gọi hàm teleportUnit trong GameRoom
+                    gameRoom.teleportUnit(player, unit, params.x, params.y);
                     
                     result = { type: 'TELEPORT', unitId: unit.id, x: params.x, y: params.y };
                 }
@@ -112,7 +112,7 @@ module.exports = {
                 }
                 break;
             
-            case 'SUICIDE_SQUAD': // Lính cảm tử ném vào địch, nổ 3x3
+            case 'SUICIDE_SQUAD': // NEW ITEM: Lính cảm tử ném vào địch, nổ 3x3 (Logic từ v3)
                 {
                     // params: { x, y } - Tọa độ ném tâm nổ
                     const targetX = params.x;
