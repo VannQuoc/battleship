@@ -63,9 +63,9 @@ module.exports = {
                     const dist = Math.abs(params.x - unit.x) + Math.abs(params.y - unit.y);
                     if (dist > 5) throw new Error('Boost range exceeded');
 
-                    // Gọi hàm teleportUnit trong GameRoom
-                    gameRoom.teleportUnit(player, unit, params.x, params.y);
-                    
+                    // [FIXED]: TRUYỀN ID THAY VÌ OBJECT
+                    gameRoom.teleportUnit(player.id, unit.id, params.x, params.y);
+                   
                     result = { type: 'TELEPORT', unitId: unit.id, x: params.x, y: params.y };
                 }
                 break;

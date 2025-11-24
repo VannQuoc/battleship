@@ -1,16 +1,18 @@
 // server/src/config/definitions.js
 module.exports = {
-  CONSTANTS: {
-    // Default values (fallback)
-    DEFAULT_MAP_SIZE: 20,
-    DEFAULT_POINTS: 2000,
-    DEFAULT_PLAYERS: 2,
-    
-    CRITICAL_THRESHOLD: 0.5,
-    SUICIDE_DAMAGE: 5, // Damage khi tàu <50% tự nổ
-    EXPLOSION_RADIUS: 1, // 3x3
-    NUKE_RADIUS: 7, // 15x15
-  },
+    CONSTANTS: {
+        DEFAULT_MAP_SIZE: 20,
+        DEFAULT_POINTS: 2000,
+        DEFAULT_PLAYERS: 2,
+        
+        // [ADDED]: Định nghĩa giới hạn Inventory rõ ràng
+        MAX_ITEMS: 6,
+        MAX_STRUCTURES: 4, 
+
+        CRITICAL_THRESHOLD: 0.5,
+        SUICIDE_DAMAGE: 5,
+        NUKE_RADIUS: 7,
+    },
 
   UNITS: {
     // --- SHIPS ---

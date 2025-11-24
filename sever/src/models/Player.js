@@ -36,10 +36,12 @@ class Player {
         const item = ITEMS[itemId];
         if (!item) return false;
         
-        // 1. Check points
+        // Check points
         if (this.points < item.cost) return false;
-        // 2. Check limit (Max 6)
-        if (this.inventory.length >= CONSTANTS.MAX_INVENTORY_SLOTS || 6) return false;
+
+        // [FIXED]: Sử dụng Constant đã định nghĩa hoặc Fallback an toàn với dấu ngoặc ()
+        const limit = CONSTANTS.MAX_ITEMS || 6; 
+        if (this.inventory.length >= limit) return false;
 
         this.points -= item.cost;
         this.inventory.push(itemId);
