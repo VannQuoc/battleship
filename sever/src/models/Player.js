@@ -55,16 +55,18 @@ class Player {
      * @returns {boolean} True nếu thêm thành công.
      */
     addItem(itemId) {
-        const itemDef = ITEMS[itemId];
-        if (!itemDef) return false;
+            const itemDef = ITEMS[itemId];
+            if (!itemDef) return false;
 
-        // Check giới hạn Inventory (Max 6 items)
-        if (this.inventory.length >= CONSTANTS.MAX_INVENTORY_SLOTS || 6) {
-            return false; // Kho đầy, không nhận được đồ
-        }
+            // SỬA: Dùng đúng tên biến CONSTANTS.MAX_ITEMS và thêm ngoặc đơn fallback
+            const limit = CONSTANTS.MAX_ITEMS || 6; 
+            
+            if (this.inventory.length >= limit) {
+                return false; // Kho đầy
+            }
 
-        this.inventory.push(itemId);
-        return true;
+            this.inventory.push(itemId);
+            return true;
     }
 
     hasItem(itemId) {
