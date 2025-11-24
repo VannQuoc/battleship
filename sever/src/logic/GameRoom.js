@@ -154,18 +154,22 @@ class GameRoom {
         }
     }
 
-    isOccupied(x, y) {
-        for(const pid in this.players) {
-            for(const u of this.players[pid].fleet) {
-                // Tàu sống hoặc xác tàu đều block đường đi
-                if(u.occupies(x, y)) return true;
-            }
-        }
-        return false;
-    }
+        // [FIX 3B]: NÂNG CẤP HÀM isOccupied (Thêm excludeUnitId)
+        isOccupied(x, y, excludeUnitId = null) {
+            for(const pid in this.players) {
+                for(const u of this.players[pid].fleet) {
+                    // Bỏ qua tàu đã chìm (nếu game cho phép đi qua xác tàu - GDD bảo xác tàu là chướng ngại vật -> OK giữ nguyên)
+                    // Bỏ qua chính tàu đang di chuyển (để tránh tự block mình khi overlap vị trí cũ)
+                    if (u.id === excludeUnitId) continue;
 
-    // --- M3: Battle Loop: Move Unit ---
-    moveUnit(playerId, unitId, newX, newY) {
+                    if (u.occupies(x, y)) return true;
+                }
+            }
+            return false;
+        }
+
+        // [FIX 3A]: CẬP NHẬT HÀM moveUnit CHECK TOÀN BỘ THÂN TÀU
+        moveUnit(playerId, unitId, newX, newY) {
         if (this.status !== 'BATTLE') throw new Error('Not in battle');
         if (this.turnQueue[this.turnIndex] !== playerId) throw new Error('Not your turn');
 
@@ -181,20 +185,30 @@ class GameRoom {
         const dist = Math.abs(newX - unit.x) + Math.abs(newY - unit.y);
         if (dist > unit.moveRange) throw new Error('Out of range');
 
-        // Check Collision: Chỉ cần check điểm cuối, vì tàu di chuyển 1 ô/lượt
-        if (this.isOccupied(newX, newY)) throw new Error('Destination blocked');
+        // VALIDATE COLLISION (Check toàn bộ thân tàu tại vị trí mới)
+            const size = unit.definition.size; // Lấy size từ config gốc hoặc unit.cells.length
+            
+            for(let i = 0; i < size; i++) {
+                // Tính tọa độ từng ô dự kiến
+                const cx = unit.vertical ? newX : newX + i;
+                const cy = unit.vertical ? newY + i : newY;
 
-        // Execute Move
-        const oldX = unit.x;
-        const oldY = unit.y;
+                // 1. Check biên bản đồ (Boundary)
+                if (cx >= this.config.mapSize || cy >= this.config.mapSize) throw new Error('Out of bounds');
 
-        // CẬP NHẬT TỌA ĐỘ VÀ HITBOX
-        unit.updateCells(newX, newY, unit.vertical);
-
-        this.logs.push({ action: 'MOVE', playerId, unitId, from: {x:oldX, y:oldY}, to: {x:newX, y:newY} });
-        this.nextTurn();
-        return { success: true };
-    }
+                // 2. Check va chạm (QUAN TRỌNG: Loại trừ chính tàu này ra)
+                if (this.isOccupied(cx, cy, unit.id)) {
+                    throw new Error(`Destination blocked at ${cx},${cy}`);
+                }
+            }
+            
+            // Nếu OK hết thì mới update
+            unit.updateCells(newX, newY, unit.vertical);
+            
+            this.logs.push({ action: 'MOVE', playerId, unitId, from: {x:unit.x, y:unit.y}, to: {x:newX, y:newY} });
+            this.nextTurn();
+            return { success: true };
+        }
 
     // Hàm teleport cho ItemSystem sử dụng
     teleportUnit(playerId, unitId, x, y) {
@@ -243,7 +257,7 @@ class GameRoom {
         for (const unit of defender.fleet) {
             if (!unit.isSunk && unit.occupies(x, y)) {
                 // Commander Passive: ASSASSIN (+1 Critical Damage)
-                const damage = attacker.commander === 'ASSASSIN' ? 2 : 1;
+                const damage = 1;
 
                 const status = unit.takeDamage(damage, x, y);
                 hitResult = status; // HIT, CRITICAL, SUNK

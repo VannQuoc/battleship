@@ -44,23 +44,28 @@ class Unit {
     }
   }
 
-  takeDamage(dmg = 1) {
-    if (this.isSunk) return 'ALREADY_SUNK';
-    this.hp -= dmg;
+    takeDamage(dmg = 1, atX = -1, atY = -1) {
+        if (this.isSunk) return 'ALREADY_SUNK';
 
-    if (this.hp <= 0) {
-      this.hp = 0;
-      this.isSunk = true;
-      this.isImmobilized = true;
-      return 'SUNK';
+        // [FIX 1]: CHECK CELL HIT STATUS
+        if (atX !== -1 && atY !== -1) {
+        const cell = this.cells.find(c => c.x === atX && c.y === atY);
+        // Nếu ô này đã bị bắn trước đó -> Không trừ HP nữa
+        if (cell && cell.hit) {
+            return 'ALREADY_HIT'; 
+        }
+        // Nếu chưa bắn -> Mark hit
+        if (cell) cell.hit = true;
+        }
+
+        this.hp -= dmg;
+
+        // ... (Logic check SUNK/CRITICAL giữ nguyên) ...
+        if (this.hp <= 0) { /* ... */ return 'SUNK'; }
+        if (this.hp < this.maxHp * 0.5) { /* ... */ return 'CRITICAL'; }
+
+        return 'HIT';
     }
-    
-    if (this.hp < this.maxHp * CONSTANTS.CRITICAL_THRESHOLD) {
-      this.isImmobilized = true;
-      return 'CRITICAL';
-    }
-    return 'HIT';
-  }
 
   // Helper check va chạm
   occupies(x, y) {

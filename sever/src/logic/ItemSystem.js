@@ -63,12 +63,22 @@ module.exports = {
                     const dist = Math.abs(params.x - unit.x) + Math.abs(params.y - unit.y);
                     if (dist > 5) throw new Error('Boost range exceeded');
 
-                    // [FIXED]: TRUYỀN ID THAY VÌ OBJECT
                     gameRoom.teleportUnit(player.id, unit.id, params.x, params.y);
-                   
-                    result = { type: 'TELEPORT', unitId: unit.id, x: params.x, y: params.y };
-                }
-                break;
+           
+                    // [FIX 2B]: LỘ DIỆN NGAY (Set flag revealedTurns)
+                    // Tàu sẽ bị lộ trong lượt hiện tại và lượt kế tiếp (tùy logic, ở đây set = 1 lượt)
+                    unit.revealedTurns = 1; 
+
+                    // Gửi event riêng để Client bên địch vẽ hiệu ứng lộ diện ngay lập tức
+                    result = { 
+                        type: 'TELEPORT', 
+                        unitId: unit.id, 
+                        x: params.x, 
+                        y: params.y, 
+                        isRevealed: true // Flag báo cho Client biết để vẽ icon mắt đỏ/lộ diện
+                    };
+                    }
+                    break;
 
             case 'DECOY': // Tạo thuyền giả
                 {
