@@ -516,62 +516,64 @@ class GameRoom {
     }
 
     // --- GET STATE (Hợp nhất Logic Vision V1 + Trả về MapData V2) ---
-    getStateFor(playerId, revealAll = false) {
-        const me = this.players[playerId];
-        const op = this.getOpponent(playerId);
-        
-        // V1 Vision Bonus
-        const visionBonus = me.activeEffects.admiralVision > 0 ? 2 : 0;
-        const myDestroyers = me.fleet.filter(u => u.code === 'DD' && !u.isSunk);
+    // --- GET STATE (Hợp nhất Logic Vision V1 + Trả về MapData V2) ---
+        getStateFor(playerId, revealAll = false) {
+            const me = this.players[playerId];
+            const op = this.getOpponent(playerId);
+            
+            // V1 Vision Bonus
+            const visionBonus = me.activeEffects.admiralVision > 0 ? 2 : 0;
+            const myDestroyers = me.fleet.filter(u => u.code === 'DD' && !u.isSunk);
 
-        const opPublicFleet = op ? op.fleet.map(u => {
-            // A. Always Visible Cases
-            if (revealAll || u.isSunk || u.revealedTurns > 0 || u.definition.alwaysVisible) {
-                return { code: u.code, x: u.x, y: u.y, vertical: u.vertical, isSunk: u.isSunk, hp: u.hp, isRevealed: u.revealedTurns > 0 };
-            }
-            
-            // B. Vision Check Logic
-            let isVisible = false;
-            
-            if (u.isStealth) { // Submarine
-                // Chỉ lộ bởi DD (Sonar)
-                for (const dd of myDestroyers) {
-                    const dist = Math.max(Math.abs(dd.x - u.x), Math.abs(dd.y - u.y));
-                    if (dist <= dd.vision + visionBonus) {
-                        isVisible = true; break;
+            const opPublicFleet = op ? op.fleet.map(u => {
+                // A. Always Visible Cases
+                if (revealAll || u.isSunk || u.revealedTurns > 0 || u.definition.alwaysVisible) {
+                    return { code: u.code, x: u.x, y: u.y, vertical: u.vertical, isSunk: u.isSunk, hp: u.hp, isRevealed: u.revealedTurns > 0 };
+                }
+                
+                // B. Vision Check Logic
+                let isVisible = false;
+                
+                if (u.isStealth) { // Submarine
+                    // Chỉ lộ bởi DD (Sonar)
+                    for (const dd of myDestroyers) {
+                        const dist = Math.max(Math.abs(dd.x - u.x), Math.abs(dd.y - u.y));
+                        if (dist <= dd.vision + visionBonus) {
+                            isVisible = true; break;
+                        }
+                    }
+                } else { // Surface Ships
+                    for (const myShip of me.fleet) {
+                        if (myShip.isSunk) continue;
+                        const dist = Math.max(Math.abs(myShip.x - u.x), Math.abs(myShip.y - u.y));
+                        if (dist <= myShip.vision + visionBonus) {
+                            isVisible = true; break;
+                        }
                     }
                 }
-            } else { // Surface Ships
-                for (const myShip of me.fleet) {
-                    if (myShip.isSunk) continue;
-                    const dist = Math.max(Math.abs(myShip.x - u.x), Math.abs(myShip.y - u.y));
-                    if (dist <= myShip.vision + visionBonus) {
-                        isVisible = true; break;
-                    }
+
+                if (isVisible) {
+                    return { code: u.code, x: u.x, y: u.y, vertical: u.vertical, isSunk: false };
                 }
-            }
+                
+                return null; // Hidden
+            }).filter(x => x) : [];
 
-            if (isVisible) {
-                return { code: u.code, x: u.x, y: u.y, vertical: u.vertical, isSunk: false };
-            }
-            
-            return null; // Hidden
-        }).filter(x => x) : [];
-
-        return {
-            status: this.status,
-            mapData: this.mapData, // V2 Feature
-            turn: this.turnQueue[this.turnIndex],
-            me: { 
-                points: me.points, 
-                fleet: me.fleet, 
-                inventory: me.inventory, 
-                activeEffects: me.activeEffects 
-            },
-            opponent: { name: op ? op.name : 'Waiting', fleet: opPublicFleet },
-            logs: this.logs
-        };
-    }
+            return {
+                status: this.status,
+                mapData: this.mapData, // V2 Feature
+                turn: this.turnQueue[this.turnIndex],
+                me: { 
+                    points: me.points, 
+                    fleet: me.fleet, 
+                    inventory: me.inventory, 
+                    activeEffects: me.activeEffects,
+                    commanderUsed: me.commanderUsed // [FIX] Gửi trạng thái skill commander
+                },
+                opponent: { name: op ? op.name : 'Waiting', fleet: opPublicFleet },
+                logs: this.logs
+            };
+        }
 }
 
 module.exports = GameRoom;
