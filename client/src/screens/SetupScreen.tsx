@@ -1,80 +1,140 @@
 import React, { useState } from 'react';
 import { useGameStore } from '../store/useGameStore';
 import { GameMap } from '../components/map/GameMap';
-
-// Config tạm unit definitions để client biết size
-const SHIP_DEFINITIONS: Record<string, {size: number, type: string}> = {
-    'CV': { size: 5, type: 'SHIP' },
-    'BB': { size: 4, type: 'SHIP' },
-    'CL': { size: 3, type: 'SHIP' },
-    'DD': { size: 2, type: 'SHIP' },
-    'SS': { size: 3, type: 'SHIP' },
-};
+import { UNIT_DEFINITIONS, TERRAIN } from '../config/constants';
+import toast from 'react-hot-toast';
 
 export const SetupScreen = () => {
-    const { deployFleet } = useGameStore();
-    const [selectedShip, setSelectedShip] = useState<string | null>(null);
+    const { deployFleet, mapData, me } = useGameStore();
+    const [selectedShipCode, setSelectedShipCode] = useState<string | null>(null);
     const [vertical, setVertical] = useState(false);
-    const [tempFleet, setTempFleet] = useState<any[]>([]);
-    
-    // Danh sách tàu cần đặt (Hardcode theo luật game)
-    const shipsToPlace = ['CV', 'BB', 'CL', 'DD', 'SS']; 
+    const [placedShips, setPlacedShips] = useState<any[]>([]);
+
+    // Ships to place (Hardcoded based on rule)
+    const availableShips = ['CV', 'BB', 'CL', 'DD', 'SS'];
 
     const handleMapClick = (x: number, y: number) => {
-        if (!selectedShip) return;
-        
-        const shipDef = SHIP_DEFINITIONS[selectedShip];
-        
-        // Client-side Validation logic (Sơ bộ)
-        // Check bounds, collision, terrain (Reef/Island)
-        
-        setTempFleet([...tempFleet, { code: selectedShip, x, y, vertical }]);
-        setSelectedShip(null); // Reset sau khi đặt
+        if (!selectedShipCode) return;
+
+        const def = UNIT_DEFINITIONS[selectedShipCode];
+        if (!def) return;
+
+        // 1. Check Bounds
+        const size = def.size;
+        const endX = vertical ? x : x + size - 1;
+        const endY = vertical ? y + size - 1 : y;
+
+        if (endX >= mapData.length || endY >= mapData.length) {
+            toast.error("Out of bounds!");
+            return;
+        }
+
+        // 2. Check Collision (Map & Ships)
+        for (let i = 0; i < size; i++) {
+            const cx = vertical ? x : x + i;
+            const cy = vertical ? y + i : y;
+            
+            // Terrain Check
+            const cellTerrain = mapData[cx][cy];
+            if (cellTerrain === TERRAIN.ISLAND) {
+                toast.error("Cannot place on Island!");
+                return;
+            }
+            if (cellTerrain === TERRAIN.REEF) {
+                 toast.error("Cannot place on Reef!");
+                 return;
+            }
+
+            // Overlap Check
+            const overlap = placedShips.some(s => {
+                const sDef = UNIT_DEFINITIONS[s.code];
+                for(let j=0; j<sDef.size; j++){
+                    const sx = s.vertical ? s.x : s.x + j;
+                    const sy = s.vertical ? s.y + j : s.y;
+                    if(sx === cx && sy === cy) return true;
+                }
+                return false;
+            });
+
+            if (overlap) {
+                toast.error("Overlap with another ship!");
+                return;
+            }
+        }
+
+        // 3. Place
+        setPlacedShips([...placedShips, { code: selectedShipCode, x, y, vertical }]);
+        setSelectedShipCode(null);
     };
 
     const handleConfirm = () => {
-        deployFleet(tempFleet);
+        if (placedShips.length < availableShips.length) {
+            toast.error("Deploy all ships first!");
+            return;
+        }
+        deployFleet(placedShips);
     };
 
+    const handleReset = () => {
+        setPlacedShips([]);
+    };
+
+    // Filter ships not yet placed
+    const remainingShips = availableShips.filter(code => 
+        !placedShips.some(s => s.code === code)
+    );
+
     return (
-        <div className="flex h-screen bg-sea-900 text-white p-4 gap-4">
-            {/* Sidebar Inventory */}
-            <div className="w-1/4 bg-sea-800 p-4 rounded border border-hologram/30">
-                <h2 className="text-xl font-mono text-hologram mb-4">ARMORY</h2>
-                <div className="flex flex-col gap-2">
-                    {shipsToPlace.map(code => (
+        <div className="flex h-screen bg-sea-900 text-white overflow-hidden">
+            {/* Sidebar */}
+            <div className="w-80 bg-sea-800 border-r border-gray-700 flex flex-col p-4">
+                <h2 className="text-xl font-mono text-hologram mb-6">FLEET DEPLOYMENT</h2>
+                
+                <div className="flex-1 overflow-y-auto space-y-2">
+                    {remainingShips.map(code => (
                         <button 
                             key={code}
-                            disabled={tempFleet.some(s => s.code === code)}
-                            onClick={() => setSelectedShip(code)}
-                            className={`p-3 text-left border ${selectedShip === code ? 'bg-radar/20 border-radar' : 'border-gray-600'} hover:bg-sea-700 transition-all`}
+                            onClick={() => setSelectedShipCode(code)}
+                            className={`w-full p-4 border rounded text-left transition-all ${
+                                selectedShipCode === code ? 'bg-radar text-black border-radar' : 'border-gray-600 hover:bg-sea-700'
+                            }`}
                         >
-                            <span className="font-bold">{code}</span>
-                            <span className="text-xs ml-2 text-gray-400">Size: {SHIP_DEFINITIONS[code].size}</span>
+                            <div className="font-bold">{UNIT_DEFINITIONS[code].name}</div>
+                            <div className="text-xs opacity-70">Size: {UNIT_DEFINITIONS[code].size} cells</div>
                         </button>
                     ))}
-                </div>
-                
-                <div className="mt-8">
-                     <label className="flex items-center gap-2 cursor-pointer">
-                        <input type="checkbox" checked={vertical} onChange={e => setVertical(e.target.checked)} />
-                        <span>Vertical Mode (Rotate)</span>
-                     </label>
+                    {remainingShips.length === 0 && (
+                        <div className="text-radar text-center py-4 border border-dashed border-radar rounded bg-radar/10">
+                            ALL UNITS READY
+                        </div>
+                    )}
                 </div>
 
-                <button 
-                    onClick={handleConfirm}
-                    className="w-full mt-auto bg-hologram text-black font-bold py-3 mt-4 hover:bg-cyan-400"
-                >
-                    CONFIRM DEPLOYMENT
-                </button>
+                <div className="mt-4 space-y-3">
+                    <label className="flex items-center gap-3 p-3 bg-black/30 rounded cursor-pointer border border-gray-600 hover:border-hologram">
+                        <input type="checkbox" className="w-5 h-5 accent-hologram" checked={vertical} onChange={e => setVertical(e.target.checked)} />
+                        <span className="font-mono text-sm">ROTATE VERTICAL (R)</span>
+                    </label>
+
+                    <div className="flex gap-2">
+                        <button onClick={handleReset} className="flex-1 py-2 border border-red-500 text-red-500 font-bold hover:bg-red-500 hover:text-white rounded">RESET</button>
+                        <button onClick={handleConfirm} className="flex-1 py-2 bg-hologram text-black font-bold hover:bg-cyan-400 rounded">CONFIRM</button>
+                    </div>
+                </div>
             </div>
 
-            {/* Main Map */}
-            <div className="flex-1 flex items-center justify-center bg-sea-950 rounded border border-hologram/20">
-                <div className="scale-90 origin-center">
-                    <GameMap interactive={true} onCellClick={handleMapClick} />
-                </div>
+            {/* Map Area */}
+            <div className="flex-1 bg-sea-950 flex items-center justify-center relative">
+                 <div className="absolute top-4 left-4 text-gray-500 font-mono text-xs">
+                    Coordinates: 00-00<br/>
+                    Terrain: WATER
+                 </div>
+                 
+                 {/* Temporary local override for me.fleet to show placed ships */}
+                 {/* Note: In real app, we should pass placedShips to GameMap to render phantom ships */}
+                 <div className="scale-90">
+                     <GameMap interactive={true} onCellClick={handleMapClick} />
+                 </div>
             </div>
         </div>
     );

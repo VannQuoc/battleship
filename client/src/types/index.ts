@@ -1,9 +1,11 @@
-export type TerrainType = 0 | 1 | 2 | 3 | 4; // Water, Island, Reef, Storm, Fog
+// client/src/types/index.ts
+
+export type TerrainType = 0 | 1 | 2 | 3 | 4;
 
 export interface CellData {
   x: number;
   y: number;
-  hit: boolean;
+  hit: boolean; // Quan trọng: Để vẽ đốt tàu bị hỏng
 }
 
 export interface Unit {
@@ -15,37 +17,43 @@ export interface Unit {
   x: number;
   y: number;
   vertical: boolean;
-  cells: CellData[];
+  cells: CellData[]; // Sync từ server
   isSunk: boolean;
-  isImmobilized: boolean;
+  isImmobilized: boolean; // Hiệu ứng mỏ neo
   chargingTurns?: number; // Cho SILO
   revealedTurns?: number; // Cho hiệu ứng lộ diện
-  definition?: any; // Config gốc từ definitions.js
+  ownerId: string;
 }
 
-export interface PlayerState {
-  points: number;
-  fleet: Unit[];
-  inventory: string[];
-  activeEffects: {
-    jammer: number;
-    admiralVision: number;
-  };
-}
-
-export interface OpponentState {
-  name: string;
-  fleet: Partial<Unit>[]; // Chỉ chứa unit đã lộ diện
+export interface GameLog {
+    turn?: number;
+    action?: string;
+    playerId?: string;
+    attacker?: string;
+    unit?: string;
+    result?: string; // HIT, MISS, BLOCKED_TERRAIN, SUNK
+    x?: number;
+    y?: number;
+    msg?: string;
 }
 
 export interface GameState {
   roomId: string | null;
   playerId: string | null;
   status: 'LOBBY' | 'SETUP' | 'BATTLE' | 'ENDED';
-  turn: string | null; // PlayerID của lượt hiện tại
+  turn: string | null;
   mapData: TerrainType[][];
-  me: PlayerState | null;
-  opponent: OpponentState | null;
-  logs: any[];
+  me: {
+    points: number;
+    fleet: Unit[];
+    inventory: string[];
+    commander: string;
+    activeEffects: any;
+  } | null;
+  opponent: {
+    name: string;
+    fleet: Partial<Unit>[]; // Fleet địch chỉ hiện những con đã lộ
+  } | null;
+  logs: GameLog[];
   winner?: string;
 }

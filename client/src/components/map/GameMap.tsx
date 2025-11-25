@@ -1,99 +1,122 @@
 import React from 'react';
 import { useGameStore } from '../../store/useGameStore';
-import { TerrainType, Unit } from '../../types';
+import { TERRAIN } from '../../config/constants';
+import { UnitRenderer } from './UnitRenderer';
 import { clsx } from 'clsx';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
+// [FIX]: Import Unit type
+import { Unit } from '../../types';
 
-// Helper render từng ô
-const Cell = ({ x, y, terrain, onClick, content }: any) => {
-  // Mapping Terrain Visuals (Requirement 5.2 & 6)
-  const getTerrainClass = (t: TerrainType) => {
-    switch(t) {
-      case 1: return 'bg-neutral-800 border-neutral-600 shadow-inner'; // ISLAND (Khối nổi)
-      case 2: return 'bg-cyan-900/50 border-cyan-800/30'; // REEF (Đá ngầm)
-      default: return 'bg-sea-900/30 border-sea-800/30 hover:bg-sea-800/50'; // WATER
-    }
+interface MapProps {
+    interactive?: boolean;
+    onCellClick?: (x: number, y: number) => void;
+    hoverMode?: 'move' | 'attack' | 'deploy' | null;
+    validMoves?: string[]; // List key "x,y"
+}
+
+export const GameMap = ({ interactive, onCellClick, hoverMode, validMoves }: MapProps) => {
+  const { mapData, me, opponent, lastEffect } = useGameStore();
+
+  if (!mapData || mapData.length === 0) return <div className="text-hologram animate-pulse">Scan Radar...</div>;
+
+  const renderShotEffect = () => {
+      if(lastEffect?.type === 'SHOT' && lastEffect.attackerId !== undefined) {
+          return (
+            <motion.div
+                initial={{ opacity: 1, scale: 2 }}
+                animate={{ opacity: 0, scale: 1 }}
+                exit={{ opacity: 0 }}
+                className="absolute w-full h-full bg-yellow-400 z-50 rounded-full"
+                style={{ 
+                    gridColumn: lastEffect.y + 1, 
+                    gridRow: lastEffect.x + 1 
+                }}
+            />
+          );
+      }
+      return null;
   };
 
   return (
-    <div 
-      onClick={() => onClick(x, y)}
-      className={clsx(
-        'relative w-10 h-10 border transition-colors cursor-crosshair',
-        getTerrainClass(terrain)
-      )}
-    >
-      {/* Terrain Visual Helper */}
-      {terrain === 1 && <span className="absolute text-[8px] text-neutral-500 top-0 left-0">ISLAND</span>}
-      {terrain === 2 && <span className="absolute text-[8px] text-cyan-500 top-0 left-0">REEF</span>}
-      
-      {/* Unit Content */}
-      {content}
-    </div>
-  );
-};
+    <div className="relative inline-block bg-sea-950 p-1 border border-hologram shadow-[0_0_20px_rgba(6,182,212,0.2)] rounded">
+        <div 
+            className="grid gap-[1px]"
+            style={{ 
+                gridTemplateColumns: `repeat(${mapData.length}, 40px)`,
+                gridTemplateRows: `repeat(${mapData.length}, 40px)`
+            }}
+        >
+            {mapData.map((row, x) => (
+                row.map((terrain, y) => {
+                    const cellKey = `${x},${y}`;
+                    const isValidMove = validMoves?.includes(cellKey);
+                    
+                    let bgClass = 'bg-sea-900/40';
+                    if (terrain === TERRAIN.ISLAND) bgClass = 'bg-neutral-700 border-neutral-600 shadow-inner';
+                    if (terrain === TERRAIN.REEF) bgClass = 'bg-cyan-900/60 border-cyan-800 border-dashed';
 
-// Unit Renderer (Xử lý Cells bị hỏng)
-const UnitRenderer = ({ unit }: { unit: Unit }) => {
-    // Tính toán vị trí tương đối trong Grid là việc của Parent,
-    // Ở đây ta giả sử render đè lên các Cell.
-    // Thực tế: Ta nên render Unit ở Layer riêng hoặc map vào từng cell.
-    // Cách đơn giản nhất cho Grid: Duyệt qua unit.cells để xác định cell nào chứa body unit.
-    return null; // Logic xử lý trong Main Map Loop
-};
+                    return (
+                        <div 
+                            key={cellKey}
+                            onClick={() => interactive && onCellClick && onCellClick(x, y)}
+                            className={clsx(
+                                "relative w-10 h-10 border border-white/5 transition-colors cursor-crosshair",
+                                bgClass,
+                                interactive && "hover:border-hologram",
+                                isValidMove && "bg-radar/30 animate-pulse",
+                                hoverMode === 'attack' && interactive && "hover:bg-alert/40"
+                            )}
+                        >
+                            {terrain === TERRAIN.ISLAND && <span className="absolute top-0 right-0 text-[8px] text-gray-400">⛰️</span>}
+                            {terrain === TERRAIN.REEF && <span className="absolute bottom-0 left-0 text-[8px] text-cyan-500">ww</span>}
 
-export const GameMap = ({ interactive = false, onCellClick }: any) => {
-  const { mapData, me, opponent } = useGameStore();
+                            {me?.fleet.map(u => {
+                                if (u.x === x && u.y === y) {
+                                    return (
+                                        <div key={u.id} className="absolute top-0 left-0 z-10"
+                                            style={{ 
+                                                width: u.vertical ? '100%' : `${u.cells.length * 100}%`,
+                                                height: u.vertical ? `${u.cells.length * 100}%` : '100%'
+                                            }}
+                                        >
+                                            <UnitRenderer unit={u} />
+                                        </div>
+                                    )
+                                }
+                                return null;
+                            })}
 
-  if (!mapData || mapData.length === 0) return <div className="text-hologram animate-pulse">Initializing Radar...</div>;
-
-  // Helper: Tìm xem ô (x,y) có Unit nào không
-  const getUnitAt = (x: number, y: number) => {
-    // 1. Check My Fleet
-    const myUnit = me?.fleet.find(u => u.cells.some(c => c.x === x && c.y === y));
-    if (myUnit) {
-        const cellInfo = myUnit.cells.find(c => c.x === x && c.y === y);
-        return (
-            <motion.div 
-                initial={{ scale: 0 }} animate={{ scale: 1 }}
-                className={clsx(
-                    "w-full h-full rounded-sm flex items-center justify-center font-bold text-xs border",
-                    myUnit.isSunk ? "bg-gray-700 opacity-50" : "bg-radar text-black border-green-400",
-                    cellInfo?.hit && "bg-red-900 text-white" // Đốt bị hỏng
-                )}
-            >
-               {myUnit.code}
-            </motion.div>
-        );
-    }
-    
-    // 2. Check Opponent Fleet (Chỉ hiện những con server gửi về)
-    const opUnit = opponent?.fleet.find(u => u.x !== undefined && u.cells && u.cells.some(c => c.x === x && c.y === y));
-    // Note: Opponent fleet từ server gửi về dạng PublicUnit, cần check kỹ
-    if(opponent?.fleet) {
-        // Logic tìm Unit đối thủ (tùy vào cấu trúc chính xác server trả về)
-        // ...
-    }
-    
-    return null;
-  };
-
-  return (
-    <div 
-        className="grid gap-[1px] bg-hologram/20 p-1 rounded border border-hologram shadow-[0_0_15px_rgba(6,182,212,0.3)]"
-        style={{ gridTemplateColumns: `repeat(${mapData.length}, minmax(0, 1fr))` }}
-    >
-      {mapData.map((row, x) => (
-        row.map((terrain, y) => (
-          <Cell 
-            key={`${x}-${y}`} 
-            x={x} y={y} 
-            terrain={terrain} 
-            content={getUnitAt(x, y)}
-            onClick={interactive ? onCellClick : undefined}
-          />
-        ))
-      ))}
+                            {opponent?.fleet.map(u => {
+                                if (u.x === x && u.y === y) {
+                                     return (
+                                        <div key={u.id} className="absolute top-0 left-0 z-10"
+                                            style={{ 
+                                                width: u.vertical ? '100%' : `${(u.cells?.length || 1) * 100}%`,
+                                                height: u.vertical ? `${(u.cells?.length || 1) * 100}%` : '100%'
+                                            }}
+                                        >
+                                            {/* Cast 'u' as Unit to fix Type Error */}
+                                            <UnitRenderer unit={u as Unit} isEnemy />
+                                        </div>
+                                    )
+                                }
+                                return null;
+                            })}
+                        </div>
+                    );
+                })
+            ))}
+        </div>
+        <div className="absolute inset-0 pointer-events-none grid" 
+             style={{ 
+                gridTemplateColumns: `repeat(${mapData.length}, 40px)`,
+                gridTemplateRows: `repeat(${mapData.length}, 40px)`,
+                gap: '1px'
+             }}>
+             <AnimatePresence>
+                {renderShotEffect()}
+             </AnimatePresence>
+        </div>
     </div>
   );
 };

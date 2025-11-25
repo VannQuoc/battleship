@@ -1,113 +1,137 @@
 import { create } from 'zustand';
 import { io, Socket } from 'socket.io-client';
-import { GameState, TerrainType } from '../types';
+import { GameState } from '../types';
 import toast from 'react-hot-toast';
 
+// 1. Define Interface
 interface GameStore extends GameState {
   socket: Socket | null;
+  lastEffect: any | null;
   
-  // Actions
+  // All required actions
   connect: (url: string) => void;
   createRoom: (name: string, roomId: string) => void;
   joinRoom: (name: string, roomId: string) => void;
+  selectCommander: (id: string) => void;
   deployFleet: (ships: any[]) => void;
+  buyItem: (itemId: string) => void;
+  moveUnit: (unitId: string, x: number, y: number) => void;
   fireShot: (x: number, y: number, preferredUnitId?: string) => void;
+  useItem: (itemId: string, params: any) => void;
+  activateSkill: () => void;
   reset: () => void;
-  
-  // Socket Listeners Setters
-  setGameState: (state: Partial<GameState>) => void;
 }
 
-const initialState: Omit<GameStore, 'socket' | 'connect' | 'createRoom' | 'joinRoom' | 'deployFleet' | 'fireShot' | 'reset' | 'setGameState'> = {
+// 2. Initial State
+const initialDataState = {
   roomId: null,
   playerId: null,
-  status: 'LOBBY',
+  status: 'LOBBY' as const,
   turn: null,
   mapData: [],
   me: null,
   opponent: null,
   logs: [],
+  lastEffect: null,
+  socket: null,
 };
 
+// 3. Store Implementation
 export const useGameStore = create<GameStore>((set, get) => ({
-  ...initialState,
-  socket: null,
+  ...initialDataState,
 
   connect: (url: string) => {
     if (get().socket) return;
     const socket = io(url);
 
-    socket.on('connect', () => {
-      console.log('Connected to server:', socket.id);
-      set({ playerId: socket.id });
-    });
-
-    // Handle Room Info (Map Data & Config)
+    socket.on('connect', () => set({ playerId: socket.id }));
+    
     socket.on('room_created', (data) => {
       set({ roomId: data.roomId, mapData: data.mapData, status: 'LOBBY' });
-      toast.success(`Room ${data.roomId} created!`);
+      toast.success(`Room ${data.roomId} ready!`);
     });
     
-    socket.on('room_info', (data) => {
-       set({ roomId: data.roomId, mapData: data.mapData, status: 'LOBBY' });
+    socket.on('room_info', (data) => set({ roomId: data.roomId, mapData: data.mapData, status: 'LOBBY' }));
+    
+    socket.on('game_state', (state) => set({ ...state }));
+    
+    socket.on('game_started', () => {
+      set({ status: 'BATTLE' });
+      toast('BATTLE STATIONS!', { icon: '⚔️', style: { background: '#ef4444', color: '#fff' } });
     });
 
-    socket.on('game_state', (state) => {
-      // Sync full state from server
-      set({
-        status: state.status,
-        turn: state.turn,
-        me: state.me,
-        opponent: state.opponent,
-        logs: state.logs,
-        mapData: state.mapData || get().mapData // Backup nếu server gửi thiếu
-      });
-      
-      // Xử lý Logs mới nhất để Toast (UI/UX Requirement 5.4)
-      const lastLog = state.logs[state.logs.length - 1];
-      if (lastLog && !lastLog.isToastShown) {
-         // Logic hiển thị toast tùy loại log
-         // (Lưu ý: Cần cơ chế đánh dấu log đã đọc ở Client để tránh spam)
+    socket.on('effect_trigger', (data) => {
+      set({ lastEffect: data });
+      if (data.type === 'SHOT') {
+        if (data.result === 'HIT') toast.success('TARGET HIT!', { icon: '💥' });
+        if (data.result === 'BLOCKED_TERRAIN') toast.error('BLOCKED BY TERRAIN', { icon: '⛰️' });
+        if (data.result === 'MISS') toast('SPLASH! Missed.', { icon: '🌊' });
+      }
+      if (data.type === 'SPY_REVEAL') {
+        toast('WARNING: ENEMY SPY REVEALING MAP!', { icon: '👁️' });
       }
     });
 
-    socket.on('game_started', () => {
-      set({ status: 'BATTLE' });
-      toast('BATTLE START!', { icon: '⚔️' });
-    });
-    
-    socket.on('effect_trigger', (data) => {
-        // Đây là nơi trigger Animation (Nổ, Đạn bay)
-        // Sẽ được xử lý bởi component EffectLayer
-        console.log('Visual Effect:', data);
-        if(data.type === 'SHOT' && data.result === 'HIT') toast.success('Target HIT!');
-        if(data.type === 'SHOT' && data.result === 'BLOCKED_TERRAIN') toast.error('Blocked by Terrain!');
+    socket.on('game_over', (data) => {
+      set({ status: 'ENDED', winner: data.winnerName });
+      
+      // [FIX]: Dùng chuỗi text thay vì JSX <div> để fix lỗi file .ts
+      toast(`GAME OVER\nWinner: ${data.winnerName}\n${data.reason}`, {
+        duration: 5000,
+        icon: '🏁',
+        style: { textAlign: 'center' }
+      });
     });
 
+    socket.on('room_log', (msg) => toast(msg, { position: 'bottom-left', style: { fontSize: '12px' } }));
     socket.on('error', (msg) => toast.error(msg));
 
     set({ socket });
   },
 
+  // Actions Implementation
   createRoom: (name, roomId) => {
     get().socket?.emit('create_room', { name, roomId });
   },
-
+  
   joinRoom: (name, roomId) => {
     get().socket?.emit('join_room', { name, roomId });
   },
-
+  
+  selectCommander: (commanderId) => {
+    const { roomId } = get();
+    if(roomId) get().socket?.emit('select_commander', { roomId, commanderId });
+  },
+  
   deployFleet: (ships) => {
     const { roomId } = get();
     if(roomId) get().socket?.emit('deploy_fleet', { roomId, ships });
   },
-
+  
+  buyItem: (itemId) => {
+    const { roomId } = get();
+    if(roomId) get().socket?.emit('buy_item', { roomId, itemId });
+  },
+  
+  moveUnit: (unitId, x, y) => {
+    const { roomId } = get();
+    if(roomId) get().socket?.emit('move_unit', { roomId, unitId, x, y });
+  },
+  
   fireShot: (x, y, preferredUnitId) => {
     const { roomId } = get();
     if(roomId) get().socket?.emit('fire_shot', { roomId, x, y, preferredUnitId });
   },
   
-  setGameState: (state) => set(state),
+  useItem: (itemId, params) => {
+    const { roomId } = get();
+    if(roomId) get().socket?.emit('use_item', { roomId, itemId, params });
+  },
   
-  reset: () => set({ ...initialState, socket: null })
+  activateSkill: () => {
+    const { roomId } = get();
+    if(roomId) get().socket?.emit('activate_skill', { roomId });
+  },
+  
+  reset: () => set({ ...initialDataState, socket: null })
 }));
