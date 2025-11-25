@@ -57,86 +57,90 @@ class GameRoom {
         return this.players[opId];
     }
 
-    // --- M2: Setup & Deployment (Đã sửa lỗi Exploit: Validate quyền sở hữu Structure) ---
+    // --- M2: Setup & Deployment (Transactional & Full Logic) ---
     deployFleet(playerId, shipsData) {
-        if (this.status !== 'LOBBY' && this.status !== 'SETUP') throw new Error('Cannot deploy now');
-
-        const player = this.players[playerId];
-        const newFleet = [];
-        const occupiedMap = new Set();
-        
-        // [FIX 1]: Clone inventory để check và trừ dần (tránh lỗi tham chiếu nếu deploy thất bại)
-        // Giả sử inventory chứa code: ['SILO', 'LIGHTHOUSE']
-        const tempInventory = [...player.inventory]; 
-
-        // Reset fleet trước khi triển khai
-        player.fleet = [];
-
-        for (const s of shipsData) {
-            const def = UNITS[s.code];
-            if (!def) return false;
-
-            // --- LOGIC CHỐNG HACK (VALIDATE OWNERSHIP) ---
-            if (def.type === 'STRUCTURE') {
-                const index = tempInventory.indexOf(s.code);
-                if (index === -1) {
-                    console.log(`[CHEATING ATTEMPT] Player ${playerId} tried to deploy ${s.code} without owning it.`);
-                    // Nếu deploy thất bại, không cập nhật gì cả
-                    return false; // Hủy toàn bộ quá trình deploy
-                }
-                // Xóa khỏi tempInventory để tránh dùng 1 item đặt nhiều lần
-                tempInventory.splice(index, 1);
-            }
-            // ---------------------------------------------
-
-            // 1. Check Boundary & Collision Self
-            const size = def.size;
-
-            for(let i = 0; i < size; i++) {
-                const cx = s.vertical ? s.x : s.x + i;
-                const cy = s.vertical ? s.y + i : s.y;
-
-                if (cx < 0 || cy < 0 || cx >= this.config.mapSize || cy >= this.config.mapSize) throw new Error('Ship placed out of boundary');
-
-                const key = `${cx},${cy}`;
-                if (occupiedMap.has(key)) throw new Error('Ships overlap each other');
-                occupiedMap.add(key);
-            }
-
-            // Tạo Unit
-            const unit = new Unit(
-                `${playerId}_${s.code}_${Date.now()}_${newFleet.length}`,
-                def,
-                s.x,
-                s.y,
-                s.vertical,
-                playerId
-            );
-
-            // Cập nhật Passive Commander 
-            // COMMANDER PASSIVE: ADMIRAL (+20% HP cho tàu)
-            if (player.commander === 'ADMIRAL' && unit.type === 'SHIP') {
-                unit.maxHp = Math.floor(unit.maxHp * 1.2);
-                unit.hp = unit.maxHp;
-            }
-            // COMMANDER PASSIVE: SPY (SS movement + 2)
-            if (player.commander === 'SPY' && unit.code === 'SS') {
-                unit.moveRange += 2;
-            }
-            // COMMANDER PASSIVE: ENGINEER (Giả định discount được set ở Player)
-            if (player.commander === 'ENGINEER') {
-                player.buildingDiscount = CONSTANTS.ENGINEER_DISCOUNT || 0.1;
-            }
-
-            newFleet.push(unit);
+        // 1. Check trạng thái game (Quan trọng: Bản fix bị thiếu)
+        if (this.status !== 'LOBBY' && this.status !== 'SETUP') {
+            console.error(`[DEPLOY ERROR] Cannot deploy in status: ${this.status}`);
+            return false; 
         }
 
-        // Nếu Deploy thành công, cập nhật lại inventory thật (đã trừ các công trình đã đặt)
-        player.inventory = tempInventory;
-        
-        player.fleet = newFleet;
-        player.ready = true;
+        const player = this.players[playerId];
+        if (!player) return false;
 
+        // 2. Khởi tạo biến tạm (Transactional Pattern)
+        // Mọi thay đổi sẽ thực hiện trên biến tạm, chỉ commit vào player khi mọi thứ hợp lệ.
+        const tempFleet = []; 
+        const occupiedMap = new Set(); 
+        const tempInventory = [...player.inventory]; // Clone inventory để trừ dần
+
+        // 3. Duyệt và Validate danh sách tàu gửi lên
+        for (const s of shipsData) {
+        const def = UNITS[s.code];
+        if (!def) return false; // Unit không tồn tại
+
+        // --- A. Validate Ownership (Chống Hack) ---
+        if (def.type === 'STRUCTURE') {
+            const index = tempInventory.indexOf(s.code);
+            if (index === -1) {
+                console.warn(`[CHEATING ATTEMPT] Player ${playerId} tried to deploy ${s.code} without owning it.`);
+                return false; // Hủy toàn bộ, không lưu gì cả
+            }
+            // Xóa khỏi kho tạm
+            tempInventory.splice(index, 1);
+        }
+
+        // --- B. Validate Vị trí & Va chạm ---
+        const size = def.size;
+        for(let i = 0; i < size; i++) {
+            const cx = s.vertical ? s.x : s.x + i;
+            const cy = s.vertical ? s.y + i : s.y;
+
+            // Fix: Bản fix thiếu check < 0 (tàu có thể đặt ở tọa độ -1)
+            if (cx < 0 || cy < 0 || cx >= this.config.mapSize || cy >= this.config.mapSize) {
+                return false; // Out of bound
+            }
+            
+            const key = `${cx},${cy}`;
+            if (occupiedMap.has(key)) return false; // Overlap (trùng nhau)
+            occupiedMap.add(key);
+        }
+
+        // --- C. Tạo Unit vào fleet tạm ---
+        const unit = new Unit(
+            `${playerId}_${s.code}_${Date.now()}_${tempFleet.length}`, // ID generation
+            def, 
+            s.x, 
+            s.y, 
+            s.vertical, 
+            playerId
+        );
+        
+        // --- D. Commander Passives (Đầy đủ) ---
+        // ADMIRAL: +20% HP cho Ship
+        if (player.commander === 'ADMIRAL' && unit.type === 'SHIP') {
+            unit.maxHp = Math.floor(unit.maxHp * 1.2);
+            unit.hp = unit.maxHp;
+        }
+        // SPY: +2 Movement cho SS
+        if (player.commander === 'SPY' && unit.code === 'SS') {
+            unit.moveRange += 2;
+        }
+        
+        tempFleet.push(unit);
+        }
+        
+        // --- E. Apply Player Passive (Missing in Fix) ---
+        // Passive này tác động lên Player chứ không phải Unit, nên đặt ngoài vòng lặp
+        if (player.commander === 'ENGINEER') {
+            player.buildingDiscount = CONSTANTS.ENGINEER_DISCOUNT || 0.1;
+        }
+
+        // 4. COMMIT CHANGES (Chỉ chạy khi không có return false nào ở trên)
+        player.inventory = tempInventory; // Cập nhật kho thật
+        player.fleet = tempFleet;         // Cập nhật đội hình thật
+        player.ready = true;              // Đánh dấu sẵn sàng
+        
         this.checkStartBattle();
         return true;
     }
@@ -379,26 +383,27 @@ class GameRoom {
     // ---------------------------------------------------------
     // 3. HÀM NEXT TURN (VÒNG LẶP XỬ LÝ PASSIVE & EVENT)
     // ---------------------------------------------------------
+    // [FIX 1]: LOGIC NEXT TURN (SẠC ĐẠN SILO)
     nextTurn() {
-        // 1. Chuyển lượt
         this.turnIndex = (this.turnIndex + 1) % this.turnQueue.length;
         const currentPlayerId = this.turnQueue[this.turnIndex];
         const player = this.players[currentPlayerId];
 
-        // 2. Trừ hiệu ứng Buff/Debuff của Player
         if (player.activeEffects.jammer > 0) player.activeEffects.jammer--;
         if (player.activeEffects.admiralVision > 0) player.activeEffects.admiralVision--;
 
-        // 3. Vòng lặp xử lý từng Unit (Structure Passive & Status)
         player.fleet.forEach(u => {
-        // [FIX] Trừ lượt lộ diện (Do Engine Boost hoặc bị bắn)
-        if (u.revealedTurns > 0) {
-            u.revealedTurns--;
-        }
+        if (u.revealedTurns > 0) u.revealedTurns--;
+        if (u.isSunk) return; // Unit chết thì thôi
 
-        if (u.isSunk || u.type !== 'STRUCTURE') return;
-        
-        u.turnCounter++; // Tăng biến đếm lượt của công trình
+        // --- FIX 1: GIẢM COOLDOWN NẠP ĐẠN ---
+        if (u.code === 'SILO' && u.chargingTurns > 0) {
+            u.chargingTurns--;
+        }
+        // -------------------------------------
+
+        if (u.type !== 'STRUCTURE') return;
+        u.turnCounter++;
 
         // --- LOGIC SUPPLY STATION (TRẠM TIẾP TẾ) ---
         if (u.code === 'SUPPLY') {
