@@ -240,56 +240,78 @@ class GameRoom {
         this.logs.push({ action: 'TELEPORT', playerId, unitId, to: {x, y} });
     }
 
-    // --- M4: Battle Loop: Fire Shot ---
     fireShot(attackerId, x, y) {
         if (this.status !== 'BATTLE') return { error: 'Not in battle' };
         if (this.turnQueue[this.turnIndex] !== attackerId) return { error: 'Not your turn' };
 
         const attacker = this.players[attackerId];
-        const defender = this.getOpponent(attackerId);
-        if (!defender) return { error: 'Opponent not found' };
+        
+        // Biến lưu kết quả tổng hợp (vì có thể bắn trúng nhiều người cùng lúc)
+        let totalHits = 0;
+        let sunkShipsList = []; // Danh sách tàu chìm (có thể chìm nhiều tàu 1 lúc)
+        let finalResult = 'MISS';
 
-        // 1. Check Passive Counter: FLARES (Giả định Flares chặn mọi loại đạn)
-        // Lưu ý: Player model phải có hasItem và removeItem
-        if (defender.hasItem('FLARES')) {
-            defender.removeItem('FLARES');
-            this.logs.push({ action: 'ITEM_BLOCK', itemId: 'FLARES', defenderId: defender.id });
-            this.nextTurn();
-            return { result: 'BLOCKED', msg: 'Shot blocked by Flares' };
-        }
+        // DUYỆT QUA TẤT CẢ NGƯỜI CHƠI TRONG PHÒNG
+        for (const pid in this.players) {
+            const player = this.players[pid];
 
-        let hitResult = 'MISS';
-        let sunkShip = null;
-
-        // 2. Check Hit
-        for (const unit of defender.fleet) {
-            if (!unit.isSunk && unit.occupies(x, y)) {
-                // Commander Passive: ASSASSIN (+1 Critical Damage)
-                const damage = 1;
-
-                const status = unit.takeDamage(damage, x, y);
-                hitResult = status; // HIT, CRITICAL, SUNK
-
-                // Cập nhật điểm
-                attacker.points += CONSTANTS.POINTS_PER_HIT || 10;
-                if (status === 'SUNK') {
-                    sunkShip = unit.code;
-                    attacker.points += CONSTANTS.POINTS_PER_KILL || 100;
-                    this.logs.push({ action: 'SUNK', unitId: unit.id, unitCode: unit.code, targetId: defender.id });
+            // 1. LOGIC FRIENDLY FIRE (BẮN TÀU MÌNH)
+            // Yêu cầu: "Bắn ở vị trí tàu của mình... sẽ không làm tàu mình mất máu"
+            if (pid === attackerId) {
+                // Vẫn check xem có tàu mình ở đó không để (có thể) hiển thị hiệu ứng visual
+                // Nhưng KHÔNG gọi takeDamage
+                const myShip = player.fleet.find(u => !u.isSunk && u.occupies(x, y));
+                if (myShip) {
+                    // Có thể log hoặc return một trạng thái visual đặc biệt
+                    // console.log("Player hit their own ship - No Damage");
                 }
-                break;
+                continue; // Bỏ qua, không trừ máu chính mình
+            }
+
+            // 2. LOGIC BẮN ĐỊCH (BATTLE ROYALE)
+            // Check tất cả tàu của người chơi này
+            for (const unit of player.fleet) {
+                if (!unit.isSunk && unit.occupies(x, y)) {
+                    // Gọi hàm takeDamage bên Unit.js
+                    // Hàm này đã xử lý việc: Nếu ô (x,y) đã vỡ trước đó -> Return ALREADY_HIT_PART
+                    const status = unit.takeDamage(1, x, y);
+
+                    if (status === 'HIT' || status === 'CRITICAL' || status === 'SUNK') {
+                        totalHits++;
+                        finalResult = 'HIT'; // Ít nhất trúng 1 người
+                        
+                        // Cộng điểm
+                        attacker.points += 50;
+                        
+                        if (status === 'SUNK') {
+                            sunkShipsList.push(unit.code);
+                            attacker.points += 200;
+                        }
+                    } else if (status === 'ALREADY_HIT_PART') {
+                        // Trúng vào phần xác tàu đã vỡ
+                        // Không trừ máu, không cộng điểm, nhưng vẫn báo cho Client biết là bắn trúng sắt vụn
+                        if (finalResult === 'MISS') finalResult = 'HIT_NO_DMG';
+                    }
+                }
             }
         }
 
-        this.logs.push({ turn: this.logs.length, attacker: attackerId, x, y, result: hitResult });
+        // Ghi log
+        this.logs.push({ 
+            turn: this.logs.length, 
+            attacker: attackerId, 
+            x, y, 
+            result: finalResult, 
+            sunk: sunkShipsList 
+        });
 
-        // [FIX 2]: DÙNG HÀM CHECK WIN CHUNG
+        // Check Win Condition ngay lập tức
         if (this.checkWinCondition()) {
-            return { result: hitResult, sunkShip, winner: this.winner };
+            return { result: finalResult, sunk: sunkShipsList, winner: this.winner, gameEnded: true };
         }
 
         this.nextTurn();
-        return { result: hitResult, sunkShip };
+        return { result: finalResult, sunk: sunkShipsList };
     }
     // ---------------------------------------------------------
     // 1. HÀM KIỂM TRA ĐIỀU KIỆN THẮNG (HELPER)

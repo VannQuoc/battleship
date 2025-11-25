@@ -94,8 +94,12 @@ module.exports = {
                     // Check Counter: WHITE_HAT
                     if (opponent.hasItem('WHITE_HAT')) {
                         opponent.removeItem('WHITE_HAT');
-                        // Trả về thông báo bị chặn và lộ vị trí
-                        return { type: 'BLOCKED_TRAP', msg: 'Hacker detected by White Hat!' }; 
+                        // [FIX 2B]: LỘ VỊ TRÍ KẺ TẤN CÔNG
+                        return { 
+                            type: 'BLOCKED_TRAP', 
+                            msg: 'Hacker detected by White Hat!',
+                            revealedLocation: { x: hackerUnit.x, y: hackerUnit.y } // Gửi tọa độ tàu hack cho địch
+                        };
                     }
                     const targetStruct = opponent.fleet.find(u => u.id === params.targetId && u.type === 'STRUCTURE');
                     if (!targetStruct) throw new Error('Invalid Structure');
@@ -148,8 +152,9 @@ module.exports = {
 
             case 'NUKE': // Nổ Hạt Nhân (Khả năng 15x15, cần SILO)
                 {
-                    const hasSilo = player.fleet.some(u => u.code === 'SILO' && !u.isSunk);
-                    if (!hasSilo) throw new Error('Cần Bệ Phóng Hạt Nhân');
+                    const activeSilo = player.fleet.find(u => u.code === 'SILO' && !u.isSunk && u.chargingTurns <= 0);
+           
+                    if (!activeSilo) throw new Error('Cần Bệ Phóng Hạt Nhân đã nạp đạn (5 lượt)');
                     
                     const radius = Math.floor(CONSTANTS.NUKE_RADIUS / 2); // Giả định CONSTANTS.NUKE_RADIUS = 15
                     const center = { x: params.x, y: params.y };
@@ -168,6 +173,7 @@ module.exports = {
                         });
                     });
                     result = { type: 'NUKE_EXPLOSION', x: params.x, y: params.y, destroyed };
+                    activeSilo.chargingTurns = 5;
                 }
                 break;
 
