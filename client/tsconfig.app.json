@@ -7,16 +7,22 @@
     "module": "ESNext",
     "types": ["vite/client"],
     "skipLibCheck": true,
+    "verbatimModuleSyntax": false,
 
-    /* Bundler mode */
+    /* Alias START */
+    "baseUrl": "./",
+    "paths": {
+      "@/*": ["src/*"]
+    },
+    /* Alias END */
+
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
-    "verbatimModuleSyntax": true,
+    
     "moduleDetection": "force",
     "noEmit": true,
     "jsx": "react-jsx",
 
-    /* Linting */
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,

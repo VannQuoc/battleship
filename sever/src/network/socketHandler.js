@@ -1,5 +1,5 @@
-const GameRoom = require('./logic/GameRoom');
-const CommanderSystem = require('./logic/CommanderSystem');
+const GameRoom = require('../logic/GameRoom');
+const CommanderSystem = require('../logic/CommanderSystem');
 
 // Lưu trữ các phòng game đang hoạt động
 const rooms = {};
