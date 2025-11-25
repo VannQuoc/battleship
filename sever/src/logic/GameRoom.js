@@ -1,66 +1,76 @@
 // server/src/logic/GameRoom.js
 
-// --- PHẦN IMPORT ---
 const Player = require('../models/Player');
 const Unit = require('../models/Unit');
 const ItemSystem = require('./ItemSystem');
-// Giả định CommanderSystem dùng để validate commander nếu cần, nhưng logic chính đã nằm trong deploy
 const CommanderSystem = require('./CommanderSystem'); 
 const { CONSTANTS, UNITS, ITEMS, TERRAIN } = require('../config/definitions');
 
 /**
- * Lớp quản lý logic của một phòng game (trận đấu) - Hợp nhất V1 & V2
+ * Lớp quản lý logic của một phòng game - Support up to 10 players
  */
 class GameRoom {
     constructor(id, config = {}) {
         this.id = id;
+        this.hostId = null; // ID của chủ phòng
+        
+        // Calculate map size based on player count
+        const maxPlayers = Math.min(
+            config.maxPlayers || 2, 
+            CONSTANTS.MAX_PLAYERS || 10
+        );
+        const baseMapSize = config.mapSize || this.calculateMapSize(maxPlayers);
+        
         this.config = {
-            mapSize: config.mapSize || CONSTANTS.DEFAULT_MAP_SIZE || 20,
-            startingPoints: config.points || CONSTANTS.STARTING_POINTS || 1000,
-            maxPlayers: config.maxPlayers || CONSTANTS.DEFAULT_PLAYERS || 2
+            mapSize: baseMapSize,
+            startingPoints: config.points || CONSTANTS.DEFAULT_POINTS || 3000,
+            maxPlayers: maxPlayers
         };
         
-        // --- V2: KHỞI TẠO MAP DATA ---
+        // Map Data
         this.mapData = this.generateMap(this.config.mapSize);
 
         this.players = {}; // map socketId -> Player
-        this.turnQueue = []; // Thứ tự lượt chơi
+        this.turnQueue = [];
         this.turnIndex = 0;
+        this.turnNumber = 0; // Đếm số lượt (dùng cho cooldown)
         this.status = 'LOBBY'; // LOBBY, SETUP, BATTLE, ENDED
         this.winner = null;
         this.logs = [];
-
-        // Quản lý sự kiện trễ (Mercenary, Spawning...) của V1
         this.pendingEvents = [];
     }
 
-    // --- V2: MAP GENERATOR ---
+    // Calculate map size based on player count
+    calculateMapSize(playerCount) {
+        const base = CONSTANTS.MAP_SIZE_BASE || 20;
+        const perPlayer = CONSTANTS.MAP_SIZE_PER_PLAYER || 5;
+        return base + (playerCount * perPlayer);
+    }
+
+    // Map Generator
     generateMap(size) {
-        // Tạo mảng 2 chiều full Nước
         const map = Array(size).fill().map(() => Array(size).fill(TERRAIN.WATER));
         
-        // Random Đảo (ISLAND) - Chiếm khoảng 5% map
+        // Random Islands (~5%)
         const islandCount = Math.floor(size * size * 0.05);
-        for(let i=0; i<islandCount; i++) {
+        for(let i = 0; i < islandCount; i++) {
             const x = Math.floor(Math.random() * size);
             const y = Math.floor(Math.random() * size);
             map[x][y] = TERRAIN.ISLAND;
         }
 
-        // Random Đá Ngầm (REEF) - Chiếm 3%
+        // Random Reefs (~3%)
         const reefCount = Math.floor(size * size * 0.03);
-        for(let i=0; i<reefCount; i++) {
+        for(let i = 0; i < reefCount; i++) {
             const x = Math.floor(Math.random() * size);
             const y = Math.floor(Math.random() * size);
-            // Chỉ đặt đá nếu là nước (không đè lên đảo)
             if (map[x][y] === TERRAIN.WATER) map[x][y] = TERRAIN.REEF;
         }
 
         return map;
     }
 
-    // --- V2: HELPER CHECK LINE OF SIGHT (RAYCAST) ---
-    // Sử dụng thuật toán Bresenham
+    // Bresenham Line of Sight
     checkLineOfSight(x0, y0, x1, y1) {
         let dx = Math.abs(x1 - x0);
         let dy = Math.abs(y1 - y0);
@@ -69,12 +79,10 @@ class GameRoom {
         let err = dx - dy;
 
         while (true) {
-            if (x0 === x1 && y0 === y1) break; // Đã đến đích (không check ô đích)
+            if (x0 === x1 && y0 === y1) break;
             
-            // Skip check ô đầu tiên (nơi người bắn đứng)
-            // Check địa hình: Chỉ có ISLAND chặn đạn (REEF bắn qua được)
-            if (this.mapData[x0][y0] === TERRAIN.ISLAND) {
-                return false; // Bị chặn
+            if (this.mapData[x0] && this.mapData[x0][y0] === TERRAIN.ISLAND) {
+                return false;
             }
 
             let e2 = 2 * err;
@@ -84,87 +92,163 @@ class GameRoom {
         return true; 
     }
 
-    // --- LOBBY LOGIC ---
+    // Add Player
     addPlayer(id, name) {
         if (Object.keys(this.players).length >= this.config.maxPlayers) return false;
 
         const newPlayer = new Player(id, name);
         newPlayer.points = this.config.startingPoints;
-
-        // Active Effects (V1)
-        newPlayer.activeEffects = {
-            jammer: 0,
-            admiralVision: 0,
-        };
-        
-        // Commander Passive (V1)
+        newPlayer.activeEffects = { jammer: 0, admiralVision: 0 };
         newPlayer.buildingDiscount = 0; 
+        
+        // First player is host
+        if (Object.keys(this.players).length === 0) {
+            this.hostId = id;
+        }
         
         this.players[id] = newPlayer;
         return true;
     }
 
+    // Get all other players (for multiplayer)
+    getOtherPlayers(myId) {
+        return Object.values(this.players).filter(p => p.id !== myId);
+    }
+
+    // Get opponent (for 2 player mode)
     getOpponent(myId) {
         const opId = Object.keys(this.players).find(id => id !== myId);
         return this.players[opId];
     }
 
-    // --- DEPLOYMENT (Hợp nhất: Transactional của V1 + Check Terrain của V2) ---
+    // Get all players data for lobby display
+    getAllPlayersPublicData() {
+        const data = {};
+        for (const [id, player] of Object.entries(this.players)) {
+            data[id] = player.toPublicData();
+        }
+        return data;
+    }
+
+    // Player ready toggle
+    setPlayerReady(playerId, ready = true) {
+        const player = this.players[playerId];
+        if (!player) return false;
+        if (this.status !== 'LOBBY') return false;
+        
+        player.ready = ready;
+        return true;
+    }
+
+    // Check if all players ready
+    areAllPlayersReady() {
+        const players = Object.values(this.players);
+        const minPlayers = CONSTANTS.MIN_PLAYERS || 2;
+        if (players.length < minPlayers) return false;
+        return players.every(p => p.ready);
+    }
+
+    // Host starts game (transitions to SETUP)
+    startGame(hostId) {
+        if (hostId !== this.hostId) return { error: 'Only host can start' };
+        if (!this.areAllPlayersReady()) return { error: 'Not all players ready' };
+        if (Object.keys(this.players).length < (CONSTANTS.MIN_PLAYERS || 2)) {
+            return { error: 'Not enough players' };
+        }
+        
+        // Reset ready state for deployment phase
+        // In SETUP, ready means "has deployed fleet"
+        Object.values(this.players).forEach(player => {
+            player.ready = false;
+        });
+        
+        this.status = 'SETUP';
+        console.log('[START GAME] Transitioned to SETUP, all players ready reset to false');
+        return { success: true };
+    }
+
+    // Deploy Fleet
     deployFleet(playerId, shipsData) {
-        if (this.status !== 'LOBBY' && this.status !== 'SETUP') {
-            console.error(`[DEPLOY ERROR] Cannot deploy in status: ${this.status}`);
-            return false; 
+        console.log(`[DEPLOY] Player ${playerId} deploying ${shipsData?.length || 0} units`);
+        
+        if (!shipsData || !Array.isArray(shipsData)) {
+            return { success: false, error: 'Invalid ships data' };
+        }
+        
+        if (this.status !== 'SETUP') {
+            return { success: false, error: `Cannot deploy in status: ${this.status}` };
         }
 
         const player = this.players[playerId];
-        if (!player) return false;
+        if (!player) {
+            return { success: false, error: 'Player not found' };
+        }
+        if (player.ready) {
+            return { success: false, error: 'Already deployed' };
+        }
 
-        // 1. Transactional Variables
         const tempFleet = []; 
         const occupiedMap = new Set(); 
-        const tempInventory = [...player.inventory]; 
+        const tempInventory = { ...player.inventory };
 
-        // 2. Validate Loop
+        console.log(`[DEPLOY] Player inventory:`, JSON.stringify(tempInventory));
+
         for (const s of shipsData) {
             const def = UNITS[s.code];
-            if (!def) return false;
-
-            // A. Validate Ownership
-            if (def.type === 'STRUCTURE') {
-                const index = tempInventory.indexOf(s.code);
-                if (index === -1) {
-                    console.warn(`[CHEATING] Player ${playerId} tried to deploy ${s.code} without owning.`);
-                    return false;
-                }
-                tempInventory.splice(index, 1);
+            if (!def) {
+                return { success: false, error: `Unknown unit: ${s.code}` };
             }
 
-            // B. Validate Position, Collision & TERRAIN (V2 Logic inserted here)
+            // Validate Structure ownership
+            if (def.type === 'STRUCTURE') {
+                console.log(`[DEPLOY] Checking structure ${s.code}, inventory has: ${tempInventory[s.code] || 0}`);
+                if (!tempInventory[s.code] || tempInventory[s.code] <= 0) {
+                    return { success: false, error: `You don't own ${s.code}` };
+                }
+                tempInventory[s.code]--;
+                if (tempInventory[s.code] <= 0) {
+                    delete tempInventory[s.code];
+                }
+            }
+
+            // Validate Position & Terrain
             const size = def.size;
             for(let i = 0; i < size; i++) {
-                const cx = s.vertical ? s.x : s.x + i;
-                const cy = s.vertical ? s.y + i : s.y;
+                // vertical=true: ship extends DOWN (rows), x increases
+                // vertical=false: ship extends RIGHT (columns), y increases
+                const cx = s.vertical ? s.x + i : s.x;
+                const cy = s.vertical ? s.y : s.y + i;
 
-                // Check Bounds
-                if (cx < 0 || cy < 0 || cx >= this.config.mapSize || cy >= this.config.mapSize) return false;
+                // Bounds check
+                if (cx < 0 || cy < 0 || cx >= this.config.mapSize || cy >= this.config.mapSize) {
+                    return { success: false, error: `${s.code} out of bounds at (${cx},${cy})` };
+                }
                 
-                // Check Overlap (Unit collision)
+                // Collision check
                 const key = `${cx},${cy}`;
-                if (occupiedMap.has(key)) return false; 
+                if (occupiedMap.has(key)) {
+                    return { success: false, error: `${s.code} overlaps at (${cx},${cy})` };
+                }
                 occupiedMap.add(key);
 
-                // Check Terrain (V2): Không được đặt lên Đảo hoặc Đá (khi setup)
-                // Lưu ý: Có thể cho phép đặt lên Reef tùy game design, nhưng an toàn là cấm hết khi setup
-                if (this.mapData[cx][cy] !== TERRAIN.WATER) return false; 
+                // Terrain check
+                const terrain = this.mapData[cx] ? this.mapData[cx][cy] : undefined;
+                if (terrain === undefined) {
+                    return { success: false, error: `Invalid map position (${cx},${cy})` };
+                }
+                if (terrain !== TERRAIN.WATER) {
+                    const terrainName = terrain === TERRAIN.ISLAND ? 'Island' : terrain === TERRAIN.REEF ? 'Reef' : 'obstacle';
+                    return { success: false, error: `${s.code} on ${terrainName} at (${cx},${cy})` };
+                }
             }
 
-            // C. Create Unit
+            // Create Unit
             const unit = new Unit(
                 `${playerId}_${s.code}_${Date.now()}_${tempFleet.length}`, 
                 def, s.x, s.y, s.vertical, playerId
             );
             
-            // D. Commander Passives (V1 Logic)
+            // Commander Passives
             if (player.commander === 'ADMIRAL' && unit.type === 'SHIP') {
                 unit.maxHp = Math.floor(unit.maxHp * 1.2);
                 unit.hp = unit.maxHp;
@@ -175,47 +259,41 @@ class GameRoom {
             
             tempFleet.push(unit);
         }
-        
-        // E. Player Passive
-        if (player.commander === 'ENGINEER') {
-            player.buildingDiscount = CONSTANTS.ENGINEER_DISCOUNT || 0.1;
-        }
 
-        // 3. Commit
+        // Commit
+        console.log(`[DEPLOY] Success! Deployed ${tempFleet.length} units for player ${player.name}`);
         player.inventory = tempInventory;
         player.fleet = tempFleet;
         player.ready = true;
         
         this.checkStartBattle();
-        return true;
+        return { success: true };
     }
 
     checkStartBattle() {
-        const allReady = Object.values(this.players).every(p => p.ready);
+        const allReady = Object.values(this.players).every(p => p.ready && p.fleet.length > 0);
         const playerCount = Object.keys(this.players).length;
 
-        if (this.config.maxPlayers === 2 && allReady && playerCount === 2) {
-             this.status = 'BATTLE';
-             this.turnQueue = Object.keys(this.players);
-             this.turnIndex = 0;
-             this.logs.push({ type: 'GAME_START', msg: 'The battle begins!' });
+        if (allReady && playerCount >= (CONSTANTS.MIN_PLAYERS || 2)) {
+            this.status = 'BATTLE';
+            this.turnQueue = Object.keys(this.players);
+            this.turnIndex = 0;
+            this.logs.push({ type: 'GAME_START', msg: 'The battle begins!' });
+            return true;
         }
+        return false;
     }
 
-    // --- HELPER: IS OCCUPIED (V1 Updated) ---
     isOccupied(x, y, excludeUnitId = null) {
         for(const pid in this.players) {
             for(const u of this.players[pid].fleet) {
-                // Bỏ qua unit bị loại trừ (chính nó)
                 if (u.id === excludeUnitId) continue;
-                // Vẫn check va chạm với xác tàu (theo GDD xác tàu là vật cản)
                 if (u.occupies(x, y)) return true;
             }
         }
         return false;
     }
 
-    // --- BATTLE: MOVE UNIT (V1 + V2 Combined) ---
     moveUnit(playerId, unitId, newX, newY) {
         if (this.status !== 'BATTLE') throw new Error('Not in battle');
         if (this.turnQueue[this.turnIndex] !== playerId) throw new Error('Not your turn');
@@ -227,68 +305,82 @@ class GameRoom {
         if (unit.isImmobilized) throw new Error('Engine Broken');
         if (unit.type === 'STRUCTURE') throw new Error('Structures cannot move');
 
-        // Check Range (Manhattan)
+        // Movement restriction: Ships can only move along their axis
+        // vertical ship (extending down) can only move vertically (change X)
+        // horizontal ship (extending right) can only move horizontally (change Y)
+        if (unit.vertical) {
+            // Vertical ship - can only change X (move up/down), Y must stay same
+            if (newY !== unit.y) {
+                throw new Error('Vertical ship can only move up/down');
+            }
+        } else {
+            // Horizontal ship - can only change Y (move left/right), X must stay same
+            if (newX !== unit.x) {
+                throw new Error('Horizontal ship can only move left/right');
+            }
+        }
+
         const dist = Math.abs(newX - unit.x) + Math.abs(newY - unit.y);
         if (dist > unit.moveRange) throw new Error('Out of range');
 
-        // Check Collision & Terrain (Full Body Check)
         const size = unit.definition.size;
         for(let i = 0; i < size; i++) {
-            const cx = unit.vertical ? newX : newX + i;
-            const cy = unit.vertical ? newY + i : newY;
+            const cx = unit.vertical ? newX + i : newX;
+            const cy = unit.vertical ? newY : newY + i;
 
-            // 1. Boundary
-            if (cx >= this.config.mapSize || cy >= this.config.mapSize) throw new Error('Out of bounds');
-
-            // 2. Unit Collision (Exclude Self - V1 Logic)
-            if (this.isOccupied(cx, cy, unit.id)) {
-                throw new Error(`Destination blocked by unit at ${cx},${cy}`);
+            if (cx >= this.config.mapSize || cy >= this.config.mapSize || cx < 0 || cy < 0) {
+                throw new Error('Out of bounds');
             }
+            if (this.isOccupied(cx, cy, unit.id)) throw new Error(`Blocked at ${cx},${cy}`);
 
-            // 3. Terrain Collision (V2 Logic)
             const terrain = this.mapData[cx][cy];
             if (terrain === TERRAIN.ISLAND) throw new Error('Blocked by Island');
             
-            // Reef Logic: Chặn tàu to (Size >= 4) và Tàu ngầm (SS)
             if (terrain === TERRAIN.REEF) {
                 if (unit.definition.size >= 4 || unit.code === 'SS') {
-                    throw new Error('Blocked by Reef (Too large or Submarine)');
+                    throw new Error('Blocked by Reef');
                 }
             }
         }
 
-        // Commit Move
+        const oldX = unit.x;
+        const oldY = unit.y;
         unit.updateCells(newX, newY, unit.vertical);
-        this.logs.push({ action: 'MOVE', playerId, unitId, from: {x:unit.x, y:unit.y}, to: {x:newX, y:newY} });
+        this.logs.push({ action: 'MOVE', playerId, unitId, from: {x: oldX, y: oldY}, to: {x: newX, y: newY} });
         this.nextTurn();
         return { success: true };
     }
 
-    // --- BATTLE: TELEPORT (V1 Logic + V2 Terrain Check) ---
-    teleportUnit(playerId, unitId, x, y) {
+    /**
+     * Teleport unit (ENGINE_BOOST) - có thể xoay hướng
+     * @param {boolean} rotate - true để xoay hướng thuyền
+     */
+    teleportUnit(playerId, unitId, x, y, rotate = false) {
         const player = this.players[playerId];
         const unit = player.fleet.find(u => u.id === unitId);
         
         if (!unit || unit.isSunk) throw new Error('Invalid Unit');
 
+        // Xác định hướng mới (xoay nếu cần)
+        const newVertical = rotate ? !unit.vertical : unit.vertical;
+
         const size = unit.definition.size;
         for(let i = 0; i < size; i++) {
-            const cx = unit.vertical ? x : x + i;
-            const cy = unit.vertical ? y + i : y;
+            const cx = newVertical ? x + i : x;
+            const cy = newVertical ? y : y + i;
 
-            if (cx >= this.config.mapSize || cy >= this.config.mapSize) throw new Error('Out of bounds');
-            if (this.isOccupied(cx, cy, unit.id)) throw new Error('Teleport destination blocked');
-            
-            // Check Terrain cho Teleport (Không nhảy lên đảo)
+            if (cx >= this.config.mapSize || cy >= this.config.mapSize || cx < 0 || cy < 0) {
+                throw new Error('Out of bounds');
+            }
+            if (this.isOccupied(cx, cy, unit.id)) throw new Error('Teleport blocked');
             if (this.mapData[cx][cy] === TERRAIN.ISLAND) throw new Error('Cannot teleport onto Island');
         }
         
-        unit.updateCells(x, y, unit.vertical);
-        this.logs.push({ action: 'TELEPORT', playerId, unitId, to: {x, y} });
+        // Cập nhật vị trí và hướng mới
+        unit.updateCells(x, y, newVertical);
+        this.logs.push({ action: 'TELEPORT', playerId, unitId, to: {x, y}, rotated: rotate });
     }
 
-    // --- BATTLE: FIRE SHOT (V2 Logic - Enhanced) ---
-    // preferredUnitId: Client có thể gửi unitId muốn bắn. Nếu null, server tự tìm.
     fireShot(attackerId, x, y, preferredUnitId = null) {
         if (this.status !== 'BATTLE') return { error: 'Not in battle' };
         if (this.turnQueue[this.turnIndex] !== attackerId) return { error: 'Not your turn' };
@@ -296,12 +388,9 @@ class GameRoom {
         const attacker = this.players[attackerId];
         let firingUnit = null;
 
-        // 1. Xác định tàu bắn
         if (preferredUnitId) {
             const u = attacker.fleet.find(u => u.id === preferredUnitId);
-            // Validate: Tàu phải còn sống, là SHIP/STRUCTURE, và trong tầm bắn
             if (u && !u.isSunk && (u.type === 'SHIP' || u.type === 'STRUCTURE')) {
-                // Check Range
                 const dist = Math.abs(u.x - x) + Math.abs(u.y - y);
                 let maxRange = this.getUnitRange(u);
                 if (dist <= maxRange) {
@@ -310,17 +399,13 @@ class GameRoom {
             }
         }
 
-        // Nếu không có preferred hoặc preferred không hợp lệ, AUTO-SELECT tàu tốt nhất
         if (!firingUnit) {
             for (const u of attacker.fleet) {
                 if (u.isSunk || (u.type !== 'SHIP' && u.type !== 'STRUCTURE')) continue;
                 const dist = Math.abs(u.x - x) + Math.abs(u.y - y);
                 let maxRange = this.getUnitRange(u);
-
                 if (dist <= maxRange) {
                     firingUnit = u;
-                    // Nếu là Direct Fire (cần check Raycast), ưu tiên tàu bắn cầu vồng trước để chắc ăn?
-                    // Để đơn giản: Lấy tàu đầu tiên bắn tới.
                     break; 
                 }
             }
@@ -328,35 +413,32 @@ class GameRoom {
 
         if (!firingUnit) return { error: 'No unit in range' };
 
-        // 2. Check Line of Sight (V2 Role Logic)
         if (firingUnit.definition.trajectory === 'DIRECT') {
             const isClear = this.checkLineOfSight(firingUnit.x, firingUnit.y, x, y);
             if (!isClear) {
-                this.nextTurn(); // Mất lượt do bắn trúng đảo
+                this.nextTurn();
                 this.logs.push({ turn: this.logs.length, attacker: attackerId, unit: firingUnit.code, x, y, result: 'BLOCKED_TERRAIN' });
                 return { result: 'BLOCKED_TERRAIN', msg: 'Shot blocked by Island' };
             }
         }
 
-        // 3. Execute Damage
         let finalResult = 'MISS';
         let sunkShipsList = [];
         let damage = firingUnit.definition.damage || 1;
 
         for (const pid in this.players) {
-            if (pid === attackerId) continue; // Friendly fire: No damage
+            if (pid === attackerId) continue;
 
             const opponent = this.players[pid];
             for (const targetUnit of opponent.fleet) {
                 if (!targetUnit.isSunk && targetUnit.occupies(x, y)) {
-                    
-                    // V2 Logic: CL (Cruiser) bắn tàu -> No Effect (Giả định CL chỉ anti-air/sub)
                     if (firingUnit.code === 'CL' && targetUnit.type === 'SHIP') {
                         finalResult = 'NO_EFFECT';
                         continue;
                     }
 
-                    const status = targetUnit.takeDamage(damage, x, y);
+                    // Truyền turnNumber để check cooldown (không bắn cùng ô trong 2 turn)
+                    const status = targetUnit.takeDamage(damage, x, y, this.turnNumber || 0);
 
                     if (status === 'HIT' || status === 'CRITICAL' || status === 'SUNK') {
                         finalResult = 'HIT';
@@ -365,18 +447,18 @@ class GameRoom {
                             sunkShipsList.push(targetUnit.code);
                             attacker.points += 200;
                         }
-                    } else if (status === 'ALREADY_HIT_PART') {
-                        if (finalResult === 'MISS') finalResult = 'HIT_NO_DMG';
+                    } else if (status === 'ALREADY_HIT_PART' || status === 'CELL_ON_COOLDOWN') {
+                        // Ô này đã bị bắn và chưa hết cooldown
+                        if (finalResult === 'MISS') finalResult = 'CELL_COOLDOWN';
                     }
                 }
             }
         }
 
-        // 4. Log & Win Check
         this.logs.push({ 
             turn: this.logs.length, 
             attacker: attackerId, 
-            unit: firingUnit.code, // Log unit nào đã bắn
+            unit: firingUnit.code,
             x, y, 
             result: finalResult, 
             sunk: sunkShipsList 
@@ -390,30 +472,97 @@ class GameRoom {
         return { result: finalResult, sunk: sunkShipsList };
     }
 
-    // Helper: Get Range chuẩn hóa
     getUnitRange(u) {
-        if (u.definition.range !== undefined && u.definition.range === -1) return 999; // Toàn map (CV, Silo)
-        if (u.definition.rangeFactor) return this.config.mapSize * u.definition.rangeFactor; // BB
-        return u.vision + 2; // Default logic
+        if (u.definition.range !== undefined && u.definition.range === -1) return 999;
+        if (u.definition.rangeFactor) return this.config.mapSize * u.definition.rangeFactor;
+        return u.vision + 2;
     }
 
-    // --- WIN CONDITION ---
     checkWinCondition() {
+        const alivePlayers = [];
+        
         for (const playerId in this.players) {
             const player = this.players[playerId];
-            // Điều kiện bại trận: Hết sạch TÀU (Không tính Structure)
             const remainingShips = player.fleet.filter(u => u.type === 'SHIP' && !u.isSunk);
             
-            if (remainingShips.length === 0) {
-                this.status = 'ENDED';
-                this.winner = this.getOpponent(playerId).id; 
-                return true;
+            if (remainingShips.length > 0) {
+                alivePlayers.push(playerId);
             }
         }
+        
+        // Only 1 player with ships remaining = winner
+        if (alivePlayers.length === 1) {
+            this.status = 'ENDED';
+            this.winner = alivePlayers[0];
+            return true;
+        }
+        
+        // No players have ships = draw (shouldn't happen)
+        if (alivePlayers.length === 0) {
+            this.status = 'ENDED';
+            this.winner = null;
+            return true;
+        }
+        
         return false;
     }
 
-    // --- USE ITEM ---
+    /**
+     * Deploy a structure during battle (từ inventory)
+     */
+    deployStructureInBattle(playerId, structureCode, x, y, vertical = false) {
+        if (this.status !== 'BATTLE') return { success: false, error: 'Not in battle' };
+        if (this.turnQueue[this.turnIndex] !== playerId) return { success: false, error: 'Not your turn' };
+        
+        const player = this.players[playerId];
+        
+        // Check if player owns this structure in inventory
+        if (!player.hasItem(structureCode)) {
+            return { success: false, error: 'Structure not in inventory' };
+        }
+        
+        const structDef = UNITS[structureCode];
+        if (!structDef || structDef.type !== 'STRUCTURE') {
+            return { success: false, error: 'Invalid structure' };
+        }
+        
+        // Validate position
+        for (let i = 0; i < structDef.size; i++) {
+            const cx = vertical ? x + i : x;
+            const cy = vertical ? y : y + i;
+            
+            if (cx < 0 || cy < 0 || cx >= this.config.mapSize || cy >= this.config.mapSize) {
+                return { success: false, error: 'Out of bounds' };
+            }
+            
+            const terrain = this.mapData[cx][cy];
+            if (terrain === TERRAIN.ISLAND) {
+                return { success: false, error: 'Cannot place on Island' };
+            }
+            
+            if (this.isOccupied(cx, cy)) {
+                return { success: false, error: 'Position occupied' };
+            }
+        }
+        
+        // Remove from inventory and create unit
+        player.removeItem(structureCode);
+        
+        const unit = new Unit(
+            `${structureCode}_${Date.now()}`,
+            structDef,
+            x, y,
+            vertical,
+            playerId
+        );
+        player.fleet.push(unit);
+        
+        this.logs.push({ action: 'DEPLOY_STRUCTURE', playerId, structureCode, x, y });
+        this.nextTurn();
+        
+        return { success: true };
+    }
+
     useItem(playerId, itemId, params) {
         if (this.status !== 'BATTLE') throw new Error('Game not in battle phase');
         if (this.turnQueue[this.turnIndex] !== playerId) throw new Error('Not your turn');
@@ -422,15 +571,12 @@ class GameRoom {
         const itemDef = ITEMS[itemId];
 
         if (!itemDef) throw new Error('Item definition not found');
-        if (itemDef.type !== 'SKILL' && !player.inventory.includes(itemId)) throw new Error('Item not owned');
+        if (itemDef.type !== 'SKILL' && !player.hasItem(itemId)) throw new Error('Item not owned');
         
-        // Gọi ItemSystem
         const result = ItemSystem.applyItem(this, player, itemId, params);
         
-        // Xóa item dùng xong
         if (itemDef.type !== 'SKILL') {
-            const idx = player.inventory.indexOf(itemId);
-            if (idx > -1) player.inventory.splice(idx, 1);
+            player.removeItem(itemId);
         }
         
         this.logs.push({ action: 'ITEM', itemId, playerId, result });
@@ -443,28 +589,28 @@ class GameRoom {
         return result;
     }
 
-    // --- NEXT TURN (Full Logic from V1) ---
     nextTurn() {
         this.turnIndex = (this.turnIndex + 1) % this.turnQueue.length;
+        this.turnNumber++; // Tăng số lượt (dùng cho cooldown)
         const currentPlayerId = this.turnQueue[this.turnIndex];
         const player = this.players[currentPlayerId];
 
-        // 1. Giảm hiệu ứng active
+        if (!player) return;
+
+        // Reduce active effects
         if (player.activeEffects.jammer > 0) player.activeEffects.jammer--;
         if (player.activeEffects.admiralVision > 0) player.activeEffects.admiralVision--;
 
-        // 2. Loop Unit passives
+        // Unit passives
         player.fleet.forEach(u => {
             if (u.revealedTurns > 0) u.revealedTurns--;
             if (u.isSunk) return;
 
-            // Silo Charging
             if (u.code === 'SILO' && u.chargingTurns > 0) u.chargingTurns--;
 
             if (u.type !== 'STRUCTURE') return;
             u.turnCounter++;
 
-            // Healing (Supply Station)
             if (u.code === 'SUPPLY') {
                 const range = 1;
                 player.fleet.forEach(friend => {
@@ -475,7 +621,6 @@ class GameRoom {
                 });
             }
 
-            // Generate Nuke
             if (u.code === 'NUCLEAR_PLANT' && u.turnCounter >= 10) {
                 const added = player.addItem('NUKE');
                 if (added) {
@@ -484,7 +629,6 @@ class GameRoom {
                 }
             }
             
-            // Generate Drone
             if (u.code === 'AIRFIELD' && u.turnCounter >= 3) {
                 const added = player.addItem('DRONE');
                 if (added) {
@@ -494,86 +638,190 @@ class GameRoom {
             }
         });
 
-        // 3. Process Pending Events (Assassin/Mercenary)
+        // Pending events
         this.pendingEvents = this.pendingEvents.filter(ev => {
             if (ev.ownerId === currentPlayerId) {
                 ev.turnsLeft--;
                 
                 if (ev.turnsLeft <= 0 && ev.type === 'ASSASSINATE') {
-                    const targetPlayer = this.getOpponent(ev.ownerId);
-                    const targetUnit = targetPlayer.fleet.find(t => t.id === ev.targetId);
-                    
-                    if (targetUnit && !targetUnit.isSunk) {
-                        targetUnit.takeDamage(999);
-                        this.logs.push({ action: 'ASSASSINATION', targetId: ev.targetId });
-                        this.checkWinCondition(); 
+                    // Find target in any player's fleet
+                    for (const pid in this.players) {
+                        if (pid === ev.ownerId) continue;
+                        const targetUnit = this.players[pid].fleet.find(t => t.id === ev.targetId);
+                        if (targetUnit && !targetUnit.isSunk) {
+                            targetUnit.takeDamage(999);
+                            this.logs.push({ action: 'ASSASSINATION', targetId: ev.targetId });
+                            this.checkWinCondition(); 
+                        }
                     }
-                    return false; // Done
+                    return false;
                 }
             }
-            return true; // Keep
+            return true;
         });
     }
 
-    // --- GET STATE (Hợp nhất Logic Vision V1 + Trả về MapData V2) ---
-    // --- GET STATE (Hợp nhất Logic Vision V1 + Trả về MapData V2) ---
-        getStateFor(playerId, revealAll = false) {
-            const me = this.players[playerId];
-            const op = this.getOpponent(playerId);
-            
-            // V1 Vision Bonus
-            const visionBonus = me.activeEffects.admiralVision > 0 ? 2 : 0;
-            const myDestroyers = me.fleet.filter(u => u.code === 'DD' && !u.isSunk);
+    getStateFor(playerId, revealAll = false) {
+        const me = this.players[playerId];
+        if (!me) return null;
+        
+        const visionBonus = me.activeEffects.admiralVision > 0 ? 2 : 0;
+        const myDestroyers = me.fleet.filter(u => u.code === 'DD' && !u.isSunk);
 
-            const opPublicFleet = op ? op.fleet.map(u => {
-                // A. Always Visible Cases
-                if (revealAll || u.isSunk || u.revealedTurns > 0 || u.definition.alwaysVisible) {
-                    return { code: u.code, x: u.x, y: u.y, vertical: u.vertical, isSunk: u.isSunk, hp: u.hp, isRevealed: u.revealedTurns > 0 };
+        // Build opponents data (for multiplayer)
+        const opponents = {};
+        for (const [pid, player] of Object.entries(this.players)) {
+            if (pid === playerId) continue;
+            
+            const publicFleet = player.fleet.map(u => {
+                // RevealAll mode (spy skill)
+                if (revealAll) {
+                    return { 
+                        id: u.id,
+                        code: u.code, 
+                        x: u.x, 
+                        y: u.y, 
+                        vertical: u.vertical, 
+                        isSunk: u.isSunk, 
+                        hp: u.hp,
+                        maxHp: u.maxHp,
+                        isRevealed: true,
+                        cells: u.cells,
+                        type: u.type
+                    };
                 }
-                
-                // B. Vision Check Logic
-                let isVisible = false;
-                
-                if (u.isStealth) { // Submarine
-                    // Chỉ lộ bởi DD (Sonar)
-                    for (const dd of myDestroyers) {
-                        const dist = Math.max(Math.abs(dd.x - u.x), Math.abs(dd.y - u.y));
-                        if (dist <= dd.vision + visionBonus) {
-                            isVisible = true; break;
-                        }
+
+                // Sunk units always visible
+                if (u.isSunk) {
+                    return { 
+                        id: u.id,
+                        code: u.code, 
+                        x: u.x, 
+                        y: u.y, 
+                        vertical: u.vertical, 
+                        isSunk: true, 
+                        hp: 0,
+                        maxHp: u.maxHp,
+                        cells: u.cells,
+                        type: u.type
+                    };
+                }
+
+                // STRUCTURES: có cái hiện, có cái ẩn (dựa vào alwaysVisible)
+                if (u.type === 'STRUCTURE') {
+                    if (u.alwaysVisible || u.revealedTurns > 0) {
+                        return { 
+                            id: u.id,
+                            code: u.code, 
+                            x: u.x, 
+                            y: u.y, 
+                            vertical: u.vertical, 
+                            isSunk: false, 
+                            hp: u.hp,
+                            maxHp: u.maxHp,
+                            isRevealed: u.revealedTurns > 0,
+                            cells: u.cells,
+                            type: u.type
+                        };
                     }
-                } else { // Surface Ships
+                    // Hidden structure - check vision
                     for (const myShip of me.fleet) {
                         if (myShip.isSunk) continue;
                         const dist = Math.max(Math.abs(myShip.x - u.x), Math.abs(myShip.y - u.y));
                         if (dist <= myShip.vision + visionBonus) {
-                            isVisible = true; break;
+                            return { 
+                                id: u.id,
+                                code: u.code, 
+                                x: u.x, 
+                                y: u.y, 
+                                vertical: u.vertical, 
+                                isSunk: false,
+                                cells: u.cells,
+                                type: u.type
+                            };
                         }
                     }
+                    return null;
                 }
 
-                if (isVisible) {
-                    return { code: u.code, x: u.x, y: u.y, vertical: u.vertical, isSunk: false };
+                // SHIPS: Luôn ẩn mặc định
+                // Chỉ hiện khi: revealedTurns > 0 (bị lộ bởi items/actions)
+                // HOẶC được phát hiện bởi Destroyer có Sonar
+                
+                if (u.revealedTurns > 0) {
+                    return { 
+                        id: u.id,
+                        code: u.code, 
+                        x: u.x, 
+                        y: u.y, 
+                        vertical: u.vertical, 
+                        isSunk: false, 
+                        hp: u.hp,
+                        maxHp: u.maxHp,
+                        isRevealed: true,
+                        cells: u.cells,
+                        type: u.type
+                    };
+                }
+
+                // Chỉ Destroyer với Sonar có thể phát hiện ships
+                for (const dd of myDestroyers) {
+                    const dist = Math.max(Math.abs(dd.x - u.x), Math.abs(dd.y - u.y));
+                    if (dist <= dd.vision + visionBonus) {
+                        return { 
+                            id: u.id,
+                            code: u.code, 
+                            x: u.x, 
+                            y: u.y, 
+                            vertical: u.vertical, 
+                            isSunk: false,
+                            cells: u.cells,
+                            type: u.type
+                        };
+                    }
                 }
                 
-                return null; // Hidden
-            }).filter(x => x) : [];
-
-            return {
-                status: this.status,
-                mapData: this.mapData, // V2 Feature
-                turn: this.turnQueue[this.turnIndex],
-                me: { 
-                    points: me.points, 
-                    fleet: me.fleet, 
-                    inventory: me.inventory, 
-                    activeEffects: me.activeEffects,
-                    commanderUsed: me.commanderUsed // [FIX] Gửi trạng thái skill commander
-                },
-                opponent: { name: op ? op.name : 'Waiting', fleet: opPublicFleet },
-                logs: this.logs
+                return null;
+            }).filter(x => x);
+            
+            opponents[pid] = {
+                id: pid,
+                name: player.name,
+                fleet: publicFleet
             };
         }
+
+        // For 2 player compatibility
+        const opponentEntries = Object.values(opponents);
+        const singleOpponent = opponentEntries.length === 1 ? opponentEntries[0] : null;
+
+        return {
+            status: this.status,
+            mapData: this.mapData,
+            turn: this.turnQueue[this.turnIndex],
+            hostId: this.hostId,
+            me: { 
+                id: me.id,
+                name: me.name,
+                points: me.points, 
+                fleet: me.fleet, 
+                inventory: me.inventory, // Object format
+                inventoryArray: me.getInventoryArray(), // Array format
+                usedSlots: me.getUsedSlots(),
+                maxSlots: CONSTANTS.MAX_SLOTS || 10,
+                activeEffects: me.activeEffects,
+                commander: me.commander,
+                commanderUsed: me.commanderUsed,
+                ready: me.ready,
+                buildingDiscount: me.buildingDiscount,
+            },
+            opponent: singleOpponent, // For 2 player mode
+            opponents: opponents, // For multiplayer
+            players: this.getAllPlayersPublicData(), // All players public data
+            logs: this.logs,
+            config: this.config,
+        };
+    }
 }
 
 module.exports = GameRoom;

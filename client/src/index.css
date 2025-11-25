@@ -1,68 +1,283 @@
+/* client/src/index.css */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================
+   FONTS
+   ============================================================ */
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Orbitron:wght@400;500;600;700;800;900&display=swap');
+
+/* ============================================================
+   ROOT VARIABLES
+   ============================================================ */
 :root {
-  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+  /* Colors */
+  --color-sea-950: #020617;
+  --color-sea-900: #0f172a;
+  --color-sea-800: #1e293b;
+  --color-sea-700: #334155;
+  
+  --color-radar: #10b981;
+  --color-radar-dim: #059669;
+  --color-radar-glow: #34d399;
+  
+  --color-alert: #ef4444;
+  --color-alert-dim: #991b1b;
+  
+  --color-hologram: #06b6d4;
+  --color-hologram-dim: #0891b2;
+  
+  /* Typography */
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 14px;
   line-height: 1.5;
   font-weight: 400;
-
-  color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
-
+  
+  /* Rendering */
+  color-scheme: dark;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
+/* ============================================================
+   RESET & BASE
+   ============================================================ */
+*, *::before, *::after {
+  box-sizing: border-box;
 }
-a:hover {
-  color: #535bf2;
+
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background-color: var(--color-sea-950);
+  color: #e2e8f0;
+  overflow: hidden;
 }
 
 body {
-  margin: 0;
-  display: flex;
-  place-items: center;
   min-width: 320px;
-  min-height: 100vh;
 }
 
-h1 {
-  font-size: 3.2em;
-  line-height: 1.1;
+/* ============================================================
+   SCROLLBAR STYLING
+   ============================================================ */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
 }
 
+::-webkit-scrollbar-track {
+  background: var(--color-sea-900);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-sea-700);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-hologram-dim);
+}
+
+/* ============================================================
+   SELECTION
+   ============================================================ */
+::selection {
+  background: var(--color-hologram);
+  color: var(--color-sea-950);
+}
+
+/* ============================================================
+   FOCUS STATES
+   ============================================================ */
+:focus-visible {
+  outline: 2px solid var(--color-hologram);
+  outline-offset: 2px;
+}
+
+/* ============================================================
+   BUTTONS
+   ============================================================ */
 button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  background-color: #1a1a1a;
   cursor: pointer;
-  transition: border-color 0.25s;
-}
-button:hover {
-  border-color: #646cff;
-}
-button:focus,
-button:focus-visible {
-  outline: 4px auto -webkit-focus-ring-color;
+  font-family: inherit;
+  transition: all 0.2s ease;
 }
 
-@media (prefers-color-scheme: light) {
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* ============================================================
+   INPUTS
+   ============================================================ */
+input {
+  font-family: inherit;
+}
+
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  opacity: 0.5;
+}
+
+/* ============================================================
+   CUSTOM ANIMATIONS
+   ============================================================ */
+@keyframes scan {
+  0% {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  50% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+}
+
+@keyframes radar-sweep {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 5px var(--color-hologram), 0 0 10px var(--color-hologram);
+  }
+  50% {
+    box-shadow: 0 0 20px var(--color-hologram), 0 0 30px var(--color-hologram);
+  }
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  10%, 30%, 50%, 70%, 90% { transform: translateX(-4px); }
+  20%, 40%, 60%, 80% { transform: translateX(4px); }
+}
+
+@keyframes nuke-flash {
+  0% { opacity: 0; }
+  10% { opacity: 1; background: #fff; }
+  100% { opacity: 0; background: transparent; }
+}
+
+/* ============================================================
+   UTILITY CLASSES
+   ============================================================ */
+.animate-scan {
+  animation: scan 3s linear infinite;
+}
+
+.animate-radar-sweep {
+  animation: radar-sweep 4s linear infinite;
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+.animate-shake {
+  animation: shake 0.5s ease-in-out;
+}
+
+.animate-nuke-flash {
+  animation: nuke-flash 1s ease-out;
+}
+
+/* ============================================================
+   GRID PATTERN BACKGROUND
+   ============================================================ */
+.bg-grid-pattern {
+  background-image: 
+    linear-gradient(to right, rgba(30, 41, 59, 0.5) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(30, 41, 59, 0.5) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+/* ============================================================
+   RADAR EFFECT
+   ============================================================ */
+.radar-container {
+  position: relative;
+  overflow: hidden;
+}
+
+.radar-container::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(to right, transparent, var(--color-hologram), transparent);
+  animation: scan 3s linear infinite;
+  pointer-events: none;
+  z-index: 100;
+}
+
+/* ============================================================
+   GLASS MORPHISM
+   ============================================================ */
+.glass {
+  background: rgba(15, 23, 42, 0.8);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(6, 182, 212, 0.2);
+}
+
+/* ============================================================
+   TEXT GLOW EFFECTS
+   ============================================================ */
+.text-glow-cyan {
+  text-shadow: 0 0 10px var(--color-hologram), 0 0 20px var(--color-hologram);
+}
+
+.text-glow-green {
+  text-shadow: 0 0 10px var(--color-radar), 0 0 20px var(--color-radar);
+}
+
+.text-glow-red {
+  text-shadow: 0 0 10px var(--color-alert), 0 0 20px var(--color-alert);
+}
+
+/* ============================================================
+   ORBITRON FONT (for headers)
+   ============================================================ */
+.font-display {
+  font-family: 'Orbitron', sans-serif;
+}
+
+/* ============================================================
+   TOASTER CUSTOMIZATION (react-hot-toast)
+   ============================================================ */
+.go2072408551 {
+  font-family: 'JetBrains Mono', monospace !important;
+  font-size: 13px !important;
+}
+
+/* ============================================================
+   RESPONSIVE ADJUSTMENTS
+   ============================================================ */
+@media (max-width: 1024px) {
   :root {
-    color: #213547;
-    background-color: #ffffff;
+    font-size: 12px;
   }
-  a:hover {
-    color: #747bff;
-  }
-  button {
-    background-color: #f9f9f9;
+}
+
+@media (max-width: 768px) {
+  :root {
+    font-size: 11px;
   }
 }

@@ -5,17 +5,57 @@ const CommanderSystem = require('../logic/CommanderSystem');
 const rooms = {};
 
 /**
- * Hàm gửi trạng thái game (đã lọc Fog of War) riêng biệt cho từng người chơi.
- * @param {object} io Socket.IO Server instance
- * @param {GameRoom} room Instance của phòng game
+ * Gửi trạng thái game cho từng người chơi (Fog of War)
  */
 function syncRoom(io, room) {
     if (!room) return;
     
-    // Duyệt qua từng player trong phòng để gửi state riêng (Che giấu vị trí địch)
     Object.keys(room.players).forEach(pid => {
-        // getStateFor(pid, false) -> false nghĩa là không "revealAll"
         io.to(pid).emit('game_state', room.getStateFor(pid, false));
+    });
+}
+
+/**
+ * Gửi thông tin lobby cho từng người chơi (ẩn inventory/commander của đối thủ)
+ */
+function syncLobby(io, room) {
+    if (!room) return;
+    
+    // Gửi riêng cho từng player để ẩn thông tin chiến lược
+    Object.keys(room.players).forEach(pid => {
+        const playersData = {};
+        
+        for (const [playerId, player] of Object.entries(room.players)) {
+            if (playerId === pid) {
+                // Player của chính mình - hiển thị đầy đủ
+                playersData[playerId] = player.toPublicData();
+            } else {
+                // Đối thủ - chỉ hiển thị tên và trạng thái ready
+                playersData[playerId] = {
+                    id: player.id,
+                    name: player.name,
+                    ready: player.ready,
+                    // Ẩn các thông tin chiến lược
+                    commander: null,
+                    inventory: {},
+                    inventoryArray: [],
+                    points: '???',
+                    usedSlots: 0,
+                    maxSlots: 10,
+                };
+            }
+        }
+        
+        const lobbyData = {
+            roomId: room.id,
+            status: room.status,
+            hostId: room.hostId,
+            config: room.config,
+            players: playersData,
+            mapData: room.mapData,
+        };
+        
+        io.to(pid).emit('lobby_update', lobbyData);
     });
 }
 
@@ -24,7 +64,7 @@ module.exports = (io) => {
         console.log(`Client connected: ${socket.id}`);
 
         // =========================================================
-        // M1: ROOM & JOIN LOGIC (Merge V1 Logic + V2 Map Data)
+        // M1: ROOM & JOIN LOGIC
         // =========================================================
 
         // 1. Tạo Room
@@ -32,12 +72,15 @@ module.exports = (io) => {
             if (rooms[roomId]) return socket.emit('error', 'Room already exists');
             
             try {
-                // Config mặc định nếu thiếu
+                console.log('[CREATE ROOM] Config received:', config);
+                
                 const finalConfig = { 
-                    mapSize: config.mapSize || 20, 
-                    points: config.points || 1000, 
-                    maxPlayers: 2 
+                    mapSize: config.mapSize || 30, 
+                    points: config.points || 3000, 
+                    maxPlayers: config.maxPlayers || 2
                 };
+                
+                console.log('[CREATE ROOM] Final config:', finalConfig);
 
                 const room = new GameRoom(roomId, finalConfig);
                 room.addPlayer(socket.id, name);
@@ -45,15 +88,19 @@ module.exports = (io) => {
                 rooms[roomId] = room;
                 socket.join(roomId);
 
-                // [FIX V2]: Gửi mapData ngay khi tạo phòng để client vẽ bản đồ
+                // Gửi room_created với players data
+                const playersData = room.getAllPlayersPublicData();
+                console.log('[CREATE ROOM] Players data:', playersData);
+                
                 socket.emit('room_created', { 
                     roomId, 
                     config: room.config, 
-                    mapData: room.mapData // Quan trọng: Gửi địa hình
+                    mapData: room.mapData,
+                    hostId: room.hostId,
+                    players: playersData, // Include players!
                 });
 
                 io.to(roomId).emit('room_log', `${name} created and joined the room.`);
-                syncRoom(io, room);
 
             } catch (e) {
                 console.error(e);
@@ -66,9 +113,8 @@ module.exports = (io) => {
             const room = rooms[roomId];
             if (!room) return socket.emit('error', 'Room not found');
             
-            // Check full hoặc đang chơi
-            if (room.status !== 'LOBBY' && room.status !== 'SETUP') {
-                 return socket.emit('error', 'Game already started or room closed.');
+            if (room.status !== 'LOBBY') {
+                return socket.emit('error', 'Game already started or room closed.');
             }
 
             if (room.addPlayer(socket.id, name)) {
@@ -77,21 +123,26 @@ module.exports = (io) => {
                 io.to(roomId).emit('player_joined', { id: socket.id, name });
                 io.to(roomId).emit('room_log', `${name} joined.`);
 
-                // [FIX V2]: Gửi mapData cho người mới vào
+                // Gửi room_info với players data
+                const playersData = room.getAllPlayersPublicData();
+                
                 socket.emit('room_info', { 
                     roomId,
                     config: room.config, 
-                    mapData: room.mapData 
+                    mapData: room.mapData,
+                    hostId: room.hostId,
+                    players: playersData, // Include players!
                 });
 
-                syncRoom(io, room);
+                // Sync để cập nhật cho TẤT CẢ người chơi trong phòng
+                syncLobby(io, room);
             } else {
                 socket.emit('error', 'Room is full.');
             }
         });
 
         // =========================================================
-        // M2: SETUP & DEPLOYMENT
+        // M2: LOBBY - COMMANDER & SHOP
         // =========================================================
 
         socket.on('select_commander', ({ roomId, commanderId }) => {
@@ -101,13 +152,9 @@ module.exports = (io) => {
 
             if (player && room.status === 'LOBBY') {
                 try {
-                    // Cần đảm bảo Player model có hàm setCommander hoặc gán trực tiếp
-                    player.commander = commanderId; 
-                    // Nếu dùng CommanderSystem để init stats:
-                    // CommanderSystem.applyPassive(player); 
-                    
-                    io.to(roomId).emit('room_log', `${player.name} selected commander ${commanderId}.`);
-                    syncRoom(io, room);
+                    player.setCommander(commanderId);
+                    // Không thông báo cho đối thủ biết mình chọn tướng gì
+                    syncLobby(io, room);
                 } catch (e) {
                     socket.emit('error', e.message);
                 }
@@ -119,15 +166,23 @@ module.exports = (io) => {
             if (!room) return;
             const player = room.players[socket.id];
 
-            if (player && room.status === 'LOBBY') {
+            // Allow buying in LOBBY and BATTLE phases
+            if (player && (room.status === 'LOBBY' || room.status === 'BATTLE')) {
                 try {
-                    // Logic mua đồ nằm trong Player Model hoặc GameRoom helper
                     const success = player.buyItem(itemId); 
                     if (success) {
-                        io.to(roomId).emit('room_log', `${player.name} bought item ${itemId}.`);
-                        syncRoom(io, room);
+                        // Chỉ thông báo cho chính người mua (không leak cho đối thủ)
+                        socket.emit('purchase_success', { itemId, points: player.points });
+                        
+                        if (room.status === 'BATTLE') {
+                            // Không log mua hàng để đối thủ không biết
+                            syncRoom(io, room);
+                        } else {
+                            // Trong lobby chỉ sync data, không log
+                            syncLobby(io, room);
+                        }
                     } else {
-                        socket.emit('error', 'Not enough points or item invalid');
+                        socket.emit('error', 'Not enough points, slot full, or invalid item');
                     }
                 } catch (e) {
                     socket.emit('error', e.message);
@@ -135,47 +190,134 @@ module.exports = (io) => {
             }
         });
 
+        // Sell/Refund item (80% refund)
+        socket.on('sell_item', ({ roomId, itemId }) => {
+            const room = rooms[roomId];
+            if (!room) return;
+            const player = room.players[socket.id];
+
+            if (player && room.status === 'LOBBY') {
+                try {
+                    const result = player.sellItem(itemId);
+                    if (result.success) {
+                        // Chỉ thông báo cho người bán
+                        socket.emit('sell_success', { itemId, refund: result.refund, points: player.points });
+                        syncLobby(io, room);
+                    } else {
+                        socket.emit('error', result.error || 'Cannot sell item');
+                    }
+                } catch (e) {
+                    socket.emit('error', e.message);
+                }
+            }
+        });
+
+        // 3. Player Ready Toggle
+        socket.on('player_ready', ({ roomId, ready }) => {
+            const room = rooms[roomId];
+            if (!room) return;
+            
+            if (room.status !== 'LOBBY') {
+                return socket.emit('error', 'Cannot change ready state now');
+            }
+
+            const success = room.setPlayerReady(socket.id, ready);
+            if (success) {
+                const player = room.players[socket.id];
+                io.to(roomId).emit('room_log', `${player.name} is ${ready ? 'READY' : 'NOT READY'}.`);
+                syncLobby(io, room);
+            }
+        });
+
+        // 4. Host Start Game (Lobby -> Setup)
+        socket.on('start_game', ({ roomId }) => {
+            const room = rooms[roomId];
+            if (!room) return;
+            
+            const result = room.startGame(socket.id);
+            
+            if (result.error) {
+                return socket.emit('error', result.error);
+            }
+            
+            io.to(roomId).emit('game_phase_change', { 
+                phase: 'SETUP',
+                message: 'Game starting! Deploy your fleet!'
+            });
+            io.to(roomId).emit('room_log', 'Game started! Deploy your fleet.');
+            syncRoom(io, room);
+        });
+
+        // =========================================================
+        // M3: SETUP & DEPLOYMENT
+        // =========================================================
+
         socket.on('deploy_fleet', ({ roomId, ships }) => {
             const room = rooms[roomId];
             if (!room) return;
 
             try {
-                // Hàm deployFleet trong GameRoom mới đã handle check địa hình
-                const success = room.deployFleet(socket.id, ships);
+                console.log(`[DEPLOY] Player ${socket.id} attempting to deploy ${ships.length} units`);
+                const result = room.deployFleet(socket.id, ships);
                 
-                if (success) {
+                if (result.success) {
                     io.to(roomId).emit('room_log', `${room.players[socket.id].name} deployed fleet.`);
                     
-                    // Nếu deploy xong mà game bắt đầu (cả 2 đã ready)
+                    // Check if battle started
                     if (room.status === 'BATTLE') {
+                        io.to(roomId).emit('game_phase_change', { 
+                            phase: 'BATTLE',
+                            message: 'All players deployed! Battle begins!'
+                        });
                         io.to(roomId).emit('game_started', { turnQueue: room.turnQueue });
                     }
                     
                     syncRoom(io, room);
                 } else {
-                    socket.emit('error', 'Deployment failed: Invalid position or collision.');
+                    const errorMsg = result.error || 'Unknown error';
+                    console.error(`[DEPLOY FAILED] ${errorMsg}`);
+                    socket.emit('error', `Deployment failed: ${errorMsg}`);
                 }
             } catch (e) {
+                console.error(`[DEPLOY EXCEPTION]`, e);
                 socket.emit('error', `Deployment error: ${e.message}`);
             }
         });
 
+        // Deploy structure during battle
+        socket.on('deploy_structure', ({ roomId, structureCode, x, y, vertical = false }) => {
+            const room = rooms[roomId];
+            if (!room) return;
+            
+            if (room.status !== 'BATTLE') {
+                return socket.emit('error', 'Can only deploy structures during battle');
+            }
+            
+            try {
+                const result = room.deployStructureInBattle(socket.id, structureCode, x, y, vertical);
+                if (result.success) {
+                    syncRoom(io, room);
+                } else {
+                    socket.emit('error', result.error || 'Deploy failed');
+                }
+            } catch (e) {
+                socket.emit('error', e.message);
+            }
+        });
+
         // =========================================================
-        // M3: BATTLE ACTIONS
+        // M4: BATTLE ACTIONS
         // =========================================================
 
-        // 1. Fire Shot (Cập nhật params mới)
         socket.on('fire_shot', ({ roomId, x, y, preferredUnitId }) => {
             const room = rooms[roomId];
             if (!room) return;
 
             try {
-                // Gọi hàm fireShot mới (có hỗ trợ preferredUnitId)
                 const result = room.fireShot(socket.id, x, y, preferredUnitId);
                 
                 if (result.error) return socket.emit('error', result.error);
 
-                // Gửi hiệu ứng Visual (Nổ, Đạn bay)
                 io.to(roomId).emit('effect_trigger', { 
                     type: 'SHOT', 
                     attackerId: socket.id,
@@ -183,13 +325,13 @@ module.exports = (io) => {
                     ...result 
                 });
 
-                // Kiểm tra Game Over ngay lập tức
                 if (result.gameEnded) {
+                    const winner = room.players[result.winner];
                     io.to(roomId).emit('game_over', { 
-                        winner: result.winner,
+                        winnerId: result.winner,
+                        winnerName: winner?.name || 'Unknown',
                         reason: 'All ships sunk'
                     });
-                    // Có thể clean up room sau 1 khoảng thời gian
                 }
 
                 syncRoom(io, room);
@@ -199,15 +341,12 @@ module.exports = (io) => {
             }
         });
 
-        // 2. Move Unit
         socket.on('move_unit', ({ roomId, unitId, x, y }) => {
             const room = rooms[roomId];
             if (!room) return;
 
             try {
-                // GameRoom mới đã check địa hình (Island/Reef)
                 room.moveUnit(socket.id, unitId, x, y);
-                
                 io.to(roomId).emit('room_log', `${room.players[socket.id].name} moved a unit.`);
                 syncRoom(io, room);
             } catch (e) {
@@ -215,7 +354,6 @@ module.exports = (io) => {
             }
         });
 
-        // 3. Use Item
         socket.on('use_item', ({ roomId, itemId, params }) => {
             const room = rooms[roomId];
             if (!room) return;
@@ -223,7 +361,6 @@ module.exports = (io) => {
             try {
                 const res = room.useItem(socket.id, itemId, params);
                 
-                // Gửi hiệu ứng item
                 io.to(roomId).emit('effect_trigger', { 
                     type: 'ITEM_USE', 
                     playerId: socket.id,
@@ -232,7 +369,12 @@ module.exports = (io) => {
                 });
 
                 if (res.gameEnded) {
-                    io.to(roomId).emit('game_over', { winner: res.winner, reason: 'Item fatal blow' });
+                    const winner = room.players[res.winner];
+                    io.to(roomId).emit('game_over', { 
+                        winnerId: res.winner, 
+                        winnerName: winner?.name || 'Unknown',
+                        reason: 'Item fatal blow' 
+                    });
                 }
 
                 syncRoom(io, room); 
@@ -241,7 +383,6 @@ module.exports = (io) => {
             }
         });
 
-        // 4. Commander Skill (Logic Spy Reveal từ V1)
         socket.on('activate_skill', ({ roomId }) => {
             const room = rooms[roomId];
             if (!room) return;
@@ -251,23 +392,16 @@ module.exports = (io) => {
                 const result = CommanderSystem.activateSkill(room, player);
                 
                 if (result.type === 'SKILL_SPY') {
-                    // A. Gửi bản đồ FULL (Lộ diện toàn bộ) cho người dùng Spy
                     socket.emit('game_state', room.getStateFor(socket.id, true)); 
-                    
-                    // Thông báo Visual Effect cho cả phòng biết là có thằng dùng Spy
                     io.to(roomId).emit('effect_trigger', { type: 'SPY_REVEAL', playerId: socket.id });
 
-                    // B. Tự động tắt sau 3 giây (Timeout)
                     setTimeout(() => {
-                        // Check an toàn: Room còn tồn tại và Player còn trong đó không
                         if (rooms[roomId] && rooms[roomId].players[socket.id]) {
-                            // Gửi lại bản đồ FOG (Che đi)
                             socket.emit('game_state', rooms[roomId].getStateFor(socket.id, false));
                         }
                     }, 3000);
 
                 } else {
-                    // Skill khác (VD: Engineer repair, Admiral buff...)
                     io.to(roomId).emit('effect_trigger', { ...result, playerId: socket.id });
                     syncRoom(io, room);
                 }
@@ -277,44 +411,50 @@ module.exports = (io) => {
         });
 
         // =========================================================
-        // M4: DISCONNECT & CLEANUP
+        // M5: DISCONNECT & CLEANUP
         // =========================================================
 
         socket.on('disconnect', () => {
             const socketId = socket.id;
             console.log(`Client disconnected: ${socketId}`);
 
-            // Tìm room user đang chơi
             for (const rid in rooms) {
                 const room = rooms[rid];
                 if (room.players[socketId]) {
                     const playerName = room.players[socketId].name;
 
-                    // Nếu đang trong trận mà thoát -> Xử thua luôn
-                    if (room.status === 'BATTLE') {
+                    if (room.status === 'BATTLE' || room.status === 'SETUP') {
                         room.status = 'ENDED'; 
-                        const winner = Object.values(room.players).find(p => p.id !== socketId);
+                        
+                        // Find remaining players
+                        const remainingPlayers = Object.values(room.players).filter(p => p.id !== socketId);
+                        const winner = remainingPlayers.length === 1 ? remainingPlayers[0] : null;
                         
                         io.to(rid).emit('game_over', { 
                             reason: `${playerName} disconnected.`, 
                             winnerId: winner?.id,
-                            winnerName: winner?.name || 'Opponent'
+                            winnerName: winner?.name || 'Draw'
                         });
                         
-                        // Xóa room sau khi thông báo xong
                         delete rooms[rid];
                         console.log(`Room ${rid} closed due to disconnect.`);
                     } else {
-                        // Nếu đang ở Lobby -> Chỉ cần remove player hoặc báo hủy phòng
                         io.to(rid).emit('room_log', `${playerName} left the room.`);
                         delete room.players[socketId];
                         
-                        // Nếu phòng trống thì xóa
+                        // Transfer host if needed
+                        if (room.hostId === socketId) {
+                            const remainingIds = Object.keys(room.players);
+                            room.hostId = remainingIds.length > 0 ? remainingIds[0] : null;
+                            if (room.hostId) {
+                                io.to(rid).emit('room_log', `${room.players[room.hostId].name} is now the host.`);
+                            }
+                        }
+                        
                         if (Object.keys(room.players).length === 0) {
                             delete rooms[rid];
                         } else {
-                            // Sync lại cho người còn lại
-                            syncRoom(io, room);
+                            syncLobby(io, room);
                         }
                     }
                     break;

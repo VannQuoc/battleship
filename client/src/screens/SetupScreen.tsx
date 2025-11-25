@@ -1,292 +1,523 @@
-import React, { useState, useEffect, useMemo } from 'react';
+// client/src/screens/SetupScreen.tsx
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useGameStore } from '../store/useGameStore';
 import { GameMap } from '../components/map/GameMap';
-import { UNIT_DEFINITIONS, TERRAIN } from '../config/constants';
+import { UNIT_DEFINITIONS, TERRAIN, getShips } from '../config/constants';
 import toast from 'react-hot-toast';
-import { UnitRenderer } from '../components/map/UnitRenderer'; // Cần thiết cho Preview
-
-// Định nghĩa interface cho đơn vị được đặt
-interface PlacedUnit {
-    code: string;
-    x: number;
-    y: number;
-    vertical: boolean;
-}
+import { clsx } from 'clsx';
+import { motion, AnimatePresence } from 'framer-motion';
+import {
+  RotateCcw,
+  Check,
+  Ship,
+  Building2,
+  AlertTriangle,
+  Anchor,
+  MapPin,
+  Trash2,
+  Play,
+  Package,
+} from 'lucide-react';
+import type { ShipPlacement, Unit } from '../types';
 
 export const SetupScreen = () => {
-    const { deployFleet, mapData, me } = useGameStore();
-    // selectedCode: Mã đơn vị (CV, BB, Structure...) đang được chọn để đặt
-    const [selectedCode, setSelectedCode] = useState<string | null>(null); 
-    const [vertical, setVertical] = useState(false);
-    const [placedUnits, setPlacedUnits] = useState<PlacedUnit[]>([]);
-    const [hoverPos, setHoverPos] = useState<{x: number, y: number} | null>(null);
+  const { deployFleet, mapData, me, playerId, opponent, players } = useGameStore();
 
-    // --- Logic Inventory ---
-    const availableInventory = useMemo<Record<string, number>>(() => {
-        const counts: Record<string, number> = {};
-        // Tổng inventory ban đầu (chỉ lấy Ship & Structure)
-        me?.inventory.forEach(itemCode => {
-            if (UNIT_DEFINITIONS[itemCode]?.type === 'SHIP' || UNIT_DEFINITIONS[itemCode]?.type === 'STRUCTURE') {
-                counts[itemCode] = (counts[itemCode] || 0) + 1;
-            }
+  // --- State ---
+  const [selectedCode, setSelectedCode] = useState<string | null>(null);
+  const [vertical, setVertical] = useState(false);
+  const [placedUnits, setPlacedUnits] = useState<ShipPlacement[]>([]);
+  const [hoverPos, setHoverPos] = useState<{ x: number; y: number } | null>(null);
+
+  // --- Keyboard Shortcut for Rotation ---
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'r' || e.key === 'R') {
+        setVertical((v) => !v);
+        toast(`Hướng: ${!vertical ? 'DỌC' : 'NGANG'}`, {
+          duration: 1000,
+          position: 'bottom-center',
         });
-        
-        // Trừ đi đã đặt
-        placedUnits.forEach(u => {
-            if (counts[u.code] > 0) counts[u.code]--;
-        });
-        
-        return counts;
-    }, [me?.inventory, placedUnits]);
-
-    // --- Handle Keyboard (Rotate 'R') ---
-    useEffect(() => {
-        const handleKeyDown = (event: KeyboardEvent) => {
-            if (event.key === 'r' || event.key === 'R') {
-                setVertical(v => !v);
-                event.preventDefault();
-            }
-        };
-        window.addEventListener('keydown', handleKeyDown);
-        return () => {
-            window.removeEventListener('keydown', handleKeyDown);
-        };
-    }, []);
-
-    // --- Handle Map Click ---
-    const handleMapClick = (x: number, y: number) => {
-        if (!selectedCode) return;
-        const def = UNIT_DEFINITIONS[selectedCode];
-        if (!def) return;
-
-        // 1. Check Bounds, Terrain & Overlap
-        const size = def.size;
-        
-        for (let i = 0; i < size; i++) {
-            const cx = vertical ? x : x + i;
-            const cy = vertical ? y + i : y;
-            
-            // Check Bounds
-            if (cx >= mapData.length || cy >= mapData.length || cx < 0 || cy < 0) {
-                toast.error("Vị trí ra ngoài bản đồ!"); return;
-            }
-
-            // Check Terrain: V2 chỉ cho đặt lên WATER
-            const cellTerrain = mapData[cx][cy];
-            if (cellTerrain !== TERRAIN.WATER) {
-                toast.error(`Không thể đặt lên ${cellTerrain === TERRAIN.ISLAND ? 'Đảo' : 'Đá ngầm'}!`); 
-                return;
-            }
-
-            // Check Overlap với unit đã đặt
-            const isOverlap = placedUnits.some(u => {
-                const uDef = UNIT_DEFINITIONS[u.code];
-                for(let j=0; j<uDef.size; j++){
-                    const ux = u.vertical ? u.x : u.x + j;
-                    const uy = u.vertical ? u.y + j : u.y;
-                    if (ux === cx && uy === cy) return true;
-                }
-                return false;
-            });
-            if(isOverlap) { toast.error("Bị trùng vị trí!"); return; }
-        }
-
-        // 2. Place
-        setPlacedUnits([...placedUnits, { code: selectedCode, x, y, vertical }]);
-        
-        // Auto deselect nếu hết hàng
-        if ((availableInventory[selectedCode] || 0) <= 1) {
-            setSelectedCode(null);
-        }
-    };
-
-    const handleConfirm = () => {
-        // Check xem còn unit nào chưa đặt không?
-        const remaining = Object.values(availableInventory).reduce((a, b) => a + b, 0);
-        if (remaining > 0) {
-            toast.error(`Vẫn còn ${remaining} đơn vị chưa triển khai!`);
-            return;
-        }
-        
-        // Sắp xếp lại format cho hàm deployFleet
-        const finalFleet = placedUnits.map(u => ({
-            code: u.code,
-            x: u.x,
-            y: u.y,
-            vertical: u.vertical,
-        }));
-
-        deployFleet(finalFleet);
-    };
-
-    const handleReset = () => {
-        setPlacedUnits([]);
+      }
+      if (e.key === 'Escape') {
         setSelectedCode(null);
-        setHoverPos(null);
+      }
     };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [vertical]);
 
-    // --- Preview Logic ---
-    const renderPreviewUnit = () => {
-        if (!selectedCode || !hoverPos) return null;
+  // --- Default Ships to Deploy ---
+  const defaultShips = useMemo(() => {
+    const ships = getShips();
+    const defaults: Record<string, number> = {};
+    ships.forEach((s) => {
+      defaults[s.code] = 1;
+    });
+    return defaults;
+  }, []);
 
-        const def = UNIT_DEFINITIONS[selectedCode];
-        if (!def) return null;
+  // --- Get inventory from me or players ---
+  const myInventory = useMemo(() => {
+    // Try me.inventory first, then fall back to players[playerId]
+    if (me?.inventory && Object.keys(me.inventory).length > 0) {
+      return me.inventory;
+    }
+    const myPlayerData = playerId ? players[playerId] : null;
+    return myPlayerData?.inventory || {};
+  }, [me?.inventory, players, playerId]);
 
-        // Tính toán kích thước cho UnitRenderer
-        const size = def.size;
-        const width = vertical ? '100%' : `${size * 100}%`;
-        const height = vertical ? `${size * 100}%` : '100%';
+  // --- Calculate remaining units to deploy ---
+  const availableUnits = useMemo(() => {
+    const counts: Record<string, number> = { ...defaultShips };
 
-        // Tính toán vị trí trên grid
-        // CSS Grid index bắt đầu từ 1
-        const gridColumn = hoverPos.y + 1; 
-        const gridRow = hoverPos.x + 1;
+    // Add structures from inventory (using new object format)
+    console.log('[SETUP] My inventory:', myInventory);
+    for (const [itemCode, qty] of Object.entries(myInventory)) {
+      const def = UNIT_DEFINITIONS[itemCode];
+      if (def && def.type === 'STRUCTURE') {
+        counts[itemCode] = (counts[itemCode] || 0) + qty;
+      }
+    }
 
-        return (
-            <div 
-                className="absolute top-0 left-0 z-20 opacity-70 pointer-events-none transition-transform duration-100"
-                style={{ 
-                    gridColumn, 
-                    gridRow, 
-                    width, 
-                    height, 
-                    // Chỉnh position trong ô grid (Map cell là 32x32px)
-                    transform: `translate(calc(var(--unit-size) * ${hoverPos.y}), calc(var(--unit-size) * ${hoverPos.x}))`, 
-                    // Sử dụng biến CSS nếu cần thiết, hoặc tính toán lại trong Map
-                    // Do Map cell có gap 1px, cần tính toán cẩn thận.
-                    // Tạm thời dùng gridColumn/gridRow để đặt vị trí, UnitRenderer sẽ render kích thước tương đối.
-                    // GameMap cần được sửa để có một lớp overlay cho preview
-                }}
-            >
-                {/* Đây là cách đặt unit preview bằng Grid Layout, nhưng cần đảm bảo GameMap có lớp overlay 
-                  với style display: grid, gap: 1px và kích thước 32px
-                */}
-                <div 
-                    className="absolute z-10"
-                    style={{ 
-                        width, 
-                        height, 
-                    }}
-                >
-                    {/* UnitRenderer nhận dữ liệu giống như unit thực nhưng là trạng thái ảo */}
-                    <UnitRenderer 
-                        unit={{ 
-                            id: 'preview', code: selectedCode, x: hoverPos.x, y: hoverPos.y, vertical, 
-                            hp: def.hp, cells: Array(def.size).fill(0).map((_, i) => ({ hit: false, index: i })) 
-                        } as any}
-                        isEnemy={false}
-                        isGhost={true} // Báo cho UnitRenderer biết đây là preview
-                    />
-                </div>
-            </div>
-        );
-    };
+    // Subtract already placed units
+    placedUnits.forEach((u) => {
+      if (counts[u.code] > 0) {
+        counts[u.code]--;
+      }
+    });
 
-    // --- Render Map with placed units ---
+    console.log('[SETUP] Available units:', counts);
+    return counts;
+  }, [myInventory, placedUnits, defaultShips]);
+
+  // --- Total remaining count ---
+  const remainingCount = useMemo(() => {
+    return Object.values(availableUnits).reduce((a, b) => a + b, 0);
+  }, [availableUnits]);
+
+  const allDeployed = remainingCount === 0;
+
+  // --- Validation ---
+  const checkValidity = useCallback(
+    (code: string, x: number, y: number, isVertical: boolean): boolean => {
+      const def = UNIT_DEFINITIONS[code];
+      if (!def || !mapData || mapData.length === 0) return false;
+
+      const size = def.size;
+
+      for (let i = 0; i < size; i++) {
+        // vertical=true: ship extends DOWN (rows), x increases
+        // vertical=false: ship extends RIGHT (columns), y increases
+        const cx = isVertical ? x + i : x;
+        const cy = isVertical ? y : y + i;
+
+        if (cx < 0 || cy < 0 || cx >= mapData.length || cy >= mapData.length) {
+          return false;
+        }
+
+        const terrain = mapData[cx]?.[cy];
+        if (terrain !== TERRAIN.WATER) {
+          return false;
+        }
+
+        const isOverlap = placedUnits.some((u) => {
+          const uDef = UNIT_DEFINITIONS[u.code];
+          if (!uDef) return false;
+          for (let j = 0; j < uDef.size; j++) {
+            // Same coordinate logic as above
+            const ux = u.vertical ? u.x + j : u.x;
+            const uy = u.vertical ? u.y : u.y + j;
+            if (ux === cx && uy === cy) return true;
+          }
+          return false;
+        });
+
+        if (isOverlap) return false;
+      }
+
+      return true;
+    },
+    [mapData, placedUnits]
+  );
+
+  // --- Handlers ---
+  const handleMapClick = (x: number, y: number) => {
+    if (!selectedCode) {
+      toast.error('Chọn đơn vị trước!', { icon: '👆' });
+      return;
+    }
+
+    if ((availableUnits[selectedCode] || 0) <= 0) {
+      toast.error('Đã hết đơn vị này!');
+      setSelectedCode(null);
+      return;
+    }
+
+    if (!checkValidity(selectedCode, x, y, vertical)) {
+      toast.error('Vị trí không hợp lệ!', { icon: '❌' });
+      return;
+    }
+
+    setPlacedUnits([...placedUnits, { code: selectedCode, x, y, vertical }]);
+    toast.success(`Đã đặt ${UNIT_DEFINITIONS[selectedCode]?.name}`, {
+      duration: 1000,
+      position: 'bottom-center',
+    });
+
+    if ((availableUnits[selectedCode] || 0) <= 1) {
+      setSelectedCode(null);
+    }
+  };
+
+  const handleRemoveUnit = (index: number) => {
+    const removed = placedUnits[index];
+    setPlacedUnits(placedUnits.filter((_, i) => i !== index));
+    toast(`Đã xóa ${UNIT_DEFINITIONS[removed.code]?.name}`, { icon: '🗑️' });
+  };
+
+  const handleReset = () => {
+    setPlacedUnits([]);
+    setSelectedCode(null);
+    toast('Đã reset tất cả!', { icon: '🔄' });
+  };
+
+  const handleConfirm = () => {
+    if (!allDeployed) {
+      toast.error(`Còn ${remainingCount} đơn vị chưa triển khai!`);
+      return;
+    }
+
+    // Validate that we own all structures we're trying to deploy
+    const structureCounts: Record<string, number> = {};
+    placedUnits.forEach(u => {
+      const def = UNIT_DEFINITIONS[u.code];
+      if (def?.type === 'STRUCTURE') {
+        structureCounts[u.code] = (structureCounts[u.code] || 0) + 1;
+      }
+    });
+
+    for (const [code, count] of Object.entries(structureCounts)) {
+      const owned = myInventory[code] || 0;
+      if (count > owned) {
+        toast.error(`Bạn không sở hữu đủ ${UNIT_DEFINITIONS[code]?.name || code}! (Có: ${owned}, Cần: ${count})`);
+        return;
+      }
+    }
+
+    console.log('[SETUP] Deploying:', placedUnits);
+    console.log('[SETUP] My inventory:', myInventory);
     
-    // Gộp placedUnits vào me.fleet ảo để GameMap render
-    const mockMe = me ? {
-        ...me,
-        fleet: placedUnits.map((u, index) => ({
-            id: `temp-${index}`, // Cần ID duy nhất
-            code: u.code,
-            x: u.x,
-            y: u.y,
-            vertical: u.vertical,
-            // Thêm các trường cần thiết cho UnitRenderer
-            hp: UNIT_DEFINITIONS[u.code].hp,
-            maxHp: UNIT_DEFINITIONS[u.code].hp,
-            isSunk: false,
-            cells: Array(UNIT_DEFINITIONS[u.code].size).fill(0).map((_, i) => ({ hit: false, index: i })),
-            actionUsed: false,
-        }))
-    } : undefined;
+    deployFleet(placedUnits);
+  };
 
+  // --- Mock Data for Map ---
+  const mockMe = useMemo(() => {
+    if (!me) return null;
 
-    return (
-        <div className="flex h-screen bg-sea-900 text-white overflow-hidden">
-            {/* Sidebar */}
-            <div className="w-80 bg-sea-800 border-r border-gray-700 flex flex-col p-4">
-                <h2 className="text-xl font-mono text-hologram mb-6">TRIỂN KHAI HẠM ĐỘI</h2>
-                
-                <div className="flex-1 overflow-y-auto space-y-2">
-                    {/* Danh sách các unit còn lại */}
-                    {Object.entries(availableInventory).map(([code, count]) => {
-                        if (count <= 0) return null;
-                        const def = UNIT_DEFINITIONS[code];
-                        return (
-                            <button 
-                                key={code}
-                                onClick={() => setSelectedCode(code)}
-                                className={`w-full p-3 border rounded text-left transition-all flex justify-between items-center ${
-                                    selectedCode === code ? 'bg-radar text-black border-radar' : 'border-gray-600 hover:bg-sea-700'
-                                }`}
-                            >
-                                <div>
-                                    <div className="font-bold">{def.name} ({code})</div>
-                                    <div className="text-[10px] opacity-70">{def.type} - Size: {def.size}</div>
-                                </div>
-                                <div className="text-xl font-mono font-bold">x{count}</div>
-                            </button>
-                        );
-                    })}
-                    {Object.values(availableInventory).every(c => c === 0) && (
-                        <div className="text-radar text-center py-4 border border-dashed border-radar rounded bg-radar/10">
-                            TẤT CẢ ĐƠN VỊ ĐÃ SẴN SÀNG
-                        </div>
-                    )}
-                </div>
+    const mockFleet: Unit[] = placedUnits.map((u, i) => {
+      const def = UNIT_DEFINITIONS[u.code];
+      if (!def) return null;
 
-                <div className="mt-4 space-y-3">
-                    <label className="flex items-center gap-3 p-3 bg-black/30 rounded cursor-pointer hover:border-hologram border border-transparent">
-                        <input 
-                            type="checkbox" 
-                            className="w-5 h-5 accent-hologram" 
-                            checked={vertical} 
-                            onChange={e => setVertical(e.target.checked)} 
-                        />
-                        <span className="font-mono text-sm">XOAY DỌC (Phím R)</span>
-                    </label>
+      return {
+        id: `setup-${i}`,
+        code: u.code,
+        type: def.type,
+        x: u.x,
+        y: u.y,
+        vertical: u.vertical,
+        hp: def.hp,
+        maxHp: def.hp,
+        isSunk: false,
+        isImmobilized: false,
+        ownerId: playerId || '',
+        vision: def.vision,
+        cells: Array(def.size)
+          .fill(0)
+          .map((_, idx) => ({
+            // vertical=true: extends down (rows), x increases
+            // vertical=false: extends right (columns), y increases
+            x: u.vertical ? u.x + idx : u.x,
+            y: u.vertical ? u.y : u.y + idx,
+            hit: false,
+          })),
+      };
+    }).filter(Boolean) as Unit[];
 
-                    <div className="flex gap-2">
-                        <button onClick={handleReset} className="flex-1 py-2 border border-red-500 text-red-500 font-bold hover:bg-red-500/10 rounded transition-colors">THIẾT LẬP LẠI</button>
-                        <button 
-                            onClick={handleConfirm} 
-                            className={`flex-1 py-2 font-bold rounded transition-opacity ${
-                                Object.values(availableInventory).every(c => c === 0)
-                                    ? 'bg-hologram text-black hover:bg-cyan-400'
-                                    : 'bg-gray-700 text-gray-400 cursor-not-allowed'
-                            }`}
-                            disabled={!Object.values(availableInventory).every(c => c === 0)}
-                        >
-                            BẮT ĐẦU TRẬN CHIẾN
-                        </button>
-                    </div>
-                </div>
-            </div>
+    return { ...me, fleet: mockFleet };
+  }, [me, placedUnits, playerId]);
 
-            {/* Map Area */}
-            <div className="flex-1 bg-sea-950 flex items-center justify-center relative">
-                <div className="absolute top-4 left-4 text-gray-500 font-mono text-xs z-30">
-                     UNIT TO PLACE: **{selectedCode || 'NONE'}** ({vertical ? 'VERTICAL' : 'HORIZONTAL'})
-                </div>
-                
-                <div className="scale-90">
-                    <GameMap 
-                        interactive={true} 
-                        // Truyền mockMe để GameMap hiển thị các unit đã đặt
-                        me={mockMe as any} 
-                        onCellClick={handleMapClick} 
-                        hoverMode={selectedCode ? 'deploy' : null}
-                        onCellHover={(x, y) => setHoverPos({x, y})}
-                        // Cần GameMap có logic để render Preview/Ghost unit
-                    />
-                </div>
-                {/* Để đơn giản, tôi giả định GameMap đã được sửa để nhận mockMe 
-                    hoặc ta có thể render preview unit ở đây nếu GameMap không hỗ trợ preview
-                */}
-                
-            </div>
+  // --- Preview placement ---
+  const previewPlacement = useMemo(() => {
+    if (!selectedCode || !hoverPos || hoverPos.x < 0) return null;
+    return {
+      code: selectedCode,
+      x: hoverPos.x,
+      y: hoverPos.y,
+      vertical,
+      isValid: checkValidity(selectedCode, hoverPos.x, hoverPos.y, vertical),
+    };
+  }, [selectedCode, hoverPos, vertical, checkValidity]);
+
+  // --- Other players status ---
+  const otherPlayers = useMemo(() => {
+    return Object.values(players).filter(p => p.id !== playerId);
+  }, [players, playerId]);
+
+  return (
+    <div className="flex h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white overflow-hidden">
+      {/* Left Sidebar */}
+      <div className="w-80 bg-slate-900/80 backdrop-blur border-r border-slate-700/50 flex flex-col">
+        {/* Header */}
+        <div className="p-4 border-b border-slate-700/50">
+          <h2 className="text-xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-emerald-400 flex items-center gap-2">
+            <Anchor className="w-5 h-5 text-cyan-400" />
+            TRIỂN KHAI HẠM ĐỘI
+          </h2>
+          <p className="text-slate-400 text-sm mt-1">
+            Đặt các đơn vị vào vị trí chiến đấu
+          </p>
         </div>
-    );
+
+        {/* Ship/Structure List */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-2">
+          <h3 className="text-xs text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-1">
+            <Ship className="w-3 h-3" /> TÀU CHIẾN
+          </h3>
+          {Object.entries(availableUnits)
+            .filter(([code]) => UNIT_DEFINITIONS[code]?.type === 'SHIP')
+            .map(([code, count]) => {
+              const def = UNIT_DEFINITIONS[code];
+              if (!def || count <= 0) return null;
+
+              return (
+                <motion.button
+                  key={code}
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => setSelectedCode(code)}
+                  className={clsx(
+                    'w-full p-3 rounded-lg border transition-all text-left flex items-center justify-between',
+                    selectedCode === code
+                      ? 'bg-cyan-500/20 border-cyan-500 text-cyan-300'
+                      : 'bg-slate-800/50 border-slate-700 hover:border-slate-600'
+                  )}
+                >
+                  <div>
+                    <div className="font-bold">{def.name}</div>
+                    <div className="text-xs text-slate-500">
+                      Size: {def.size} | HP: {def.hp} | Vision: {def.vision}
+                    </div>
+                  </div>
+                  <span className="text-2xl font-mono font-bold opacity-60">×{count}</span>
+                </motion.button>
+              );
+            })}
+
+          {/* Structures Section */}
+          {Object.entries(availableUnits).some(
+            ([code, count]) => UNIT_DEFINITIONS[code]?.type === 'STRUCTURE' && count > 0
+          ) && (
+            <>
+              <h3 className="text-xs text-slate-500 uppercase tracking-wider mt-6 mb-2 flex items-center gap-1">
+                <Building2 className="w-3 h-3" /> CÔNG TRÌNH
+              </h3>
+              {Object.entries(availableUnits)
+                .filter(([code]) => UNIT_DEFINITIONS[code]?.type === 'STRUCTURE')
+                .map(([code, count]) => {
+                  const def = UNIT_DEFINITIONS[code];
+                  if (!def || count <= 0) return null;
+
+                  return (
+                    <motion.button
+                      key={code}
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      onClick={() => setSelectedCode(code)}
+                      className={clsx(
+                        'w-full p-3 rounded-lg border transition-all text-left flex items-center justify-between',
+                        selectedCode === code
+                          ? 'bg-purple-500/20 border-purple-500 text-purple-300'
+                          : 'bg-slate-800/50 border-slate-700 hover:border-slate-600'
+                      )}
+                    >
+                      <div>
+                        <div className="font-bold flex items-center gap-2">
+                          {def.name}
+                          {def.alwaysVisible && (
+                            <span className="text-[8px] bg-yellow-500/30 text-yellow-400 px-1 rounded">
+                              VISIBLE
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-xs text-slate-500">
+                          Size: {def.size} | HP: {def.hp}
+                        </div>
+                      </div>
+                      <span className="text-2xl font-mono font-bold opacity-60">×{count}</span>
+                    </motion.button>
+                  );
+                })}
+            </>
+          )}
+
+          {/* All Deployed Message */}
+          <AnimatePresence>
+            {allDeployed && (
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="mt-4 p-4 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-center"
+              >
+                <Check className="w-6 h-6 mx-auto mb-2" />
+                <p className="font-bold">SẴN SÀNG CHIẾN ĐẤU!</p>
+                <p className="text-xs opacity-70 mt-1">Nhấn START để bắt đầu</p>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+
+        {/* Controls */}
+        <div className="p-4 border-t border-slate-700/50 space-y-3">
+          <button
+            onClick={() => setVertical(!vertical)}
+            className={clsx(
+              'w-full flex items-center justify-center gap-2 px-4 py-3 rounded-lg border transition-all',
+              vertical
+                ? 'bg-cyan-500/20 border-cyan-500 text-cyan-300'
+                : 'bg-slate-800 border-slate-700 text-slate-300 hover:border-slate-600'
+            )}
+          >
+            <RotateCcw className="w-4 h-4" />
+            <span className="font-mono">
+              HƯỚNG: {vertical ? 'DỌC ↕' : 'NGANG ↔'} <span className="text-xs opacity-50">(R)</span>
+            </span>
+          </button>
+
+          <div className="flex gap-2">
+            <button
+              onClick={handleReset}
+              className="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg border border-red-500/50 text-red-400 hover:bg-red-500/10 transition-all"
+            >
+              <Trash2 className="w-4 h-4" />
+              RESET
+            </button>
+            <button
+              onClick={handleConfirm}
+              disabled={!allDeployed}
+              className={clsx(
+                'flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg font-bold transition-all',
+                allDeployed
+                  ? 'bg-gradient-to-r from-cyan-500 to-emerald-500 text-slate-900 hover:from-cyan-400 hover:to-emerald-400'
+                  : 'bg-slate-700 text-slate-500 cursor-not-allowed'
+              )}
+            >
+              <Play className="w-4 h-4" />
+              START
+            </button>
+          </div>
+
+          {/* Other Players Status */}
+          {otherPlayers.length > 0 && (
+            <div className="text-center text-sm text-slate-500 pt-2 border-t border-slate-700/50">
+              {otherPlayers.map(p => (
+                <div key={p.id} className="flex items-center justify-center gap-2">
+                  <span>{p.name}:</span>
+                  <span className={p.ready ? 'text-emerald-400' : 'text-yellow-400'}>
+                    {p.ready ? 'Đã triển khai' : 'Đang triển khai...'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Main Map Area */}
+      <div className="flex-1 relative flex flex-col">
+        <div className="bg-slate-900/80 backdrop-blur border-b border-slate-700/50 px-6 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <span className="text-slate-400 text-sm">
+              {selectedCode ? (
+                <span className="text-cyan-400">
+                  <MapPin className="w-4 h-4 inline mr-1" />
+                  Đang đặt: <strong>{UNIT_DEFINITIONS[selectedCode]?.name}</strong>{' '}
+                  (Size: {UNIT_DEFINITIONS[selectedCode]?.size})
+                </span>
+              ) : (
+                'Chọn đơn vị bên trái để bắt đầu'
+              )}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 bg-slate-800/80 px-4 py-2 rounded-lg">
+              <Package className="w-4 h-4 text-cyan-400" />
+              <span className="font-mono">
+                <span className={remainingCount === 0 ? 'text-emerald-400' : 'text-yellow-400'}>
+                  {placedUnits.length}
+                </span>
+                <span className="text-slate-500">/{placedUnits.length + remainingCount}</span>
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex-1 flex items-center justify-center p-6 overflow-auto">
+          <div className="transform scale-90">
+            <GameMap
+              interactive={true}
+              me={mockMe}
+              onCellClick={handleMapClick}
+              onCellHover={(x, y) => setHoverPos({ x, y })}
+              hoverMode={selectedCode ? 'deploy' : null}
+              previewPlacement={previewPlacement}
+            />
+          </div>
+        </div>
+
+        {placedUnits.length > 0 && (
+          <div className="bg-slate-900/80 backdrop-blur border-t border-slate-700/50 px-6 py-3">
+            <div className="flex items-center gap-2 overflow-x-auto pb-1">
+              <span className="text-xs text-slate-500 shrink-0">Đã đặt:</span>
+              {placedUnits.map((u, idx) => (
+                <motion.div
+                  key={idx}
+                  initial={{ opacity: 0, scale: 0.8 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  className="flex items-center gap-1 bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs shrink-0"
+                >
+                  <span>{UNIT_DEFINITIONS[u.code]?.name}</span>
+                  <span className="text-slate-500">
+                    ({u.x},{u.y})
+                  </span>
+                  <button
+                    onClick={() => handleRemoveUnit(idx)}
+                    className="text-red-400 hover:text-red-300 ml-1"
+                  >
+                    ×
+                  </button>
+                </motion.div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <AnimatePresence>
+          {previewPlacement && !previewPlacement.isValid && (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 20 }}
+              className="absolute bottom-24 left-1/2 -translate-x-1/2 bg-red-500/90 text-white px-4 py-2 rounded-lg flex items-center gap-2 shadow-lg"
+            >
+              <AlertTriangle className="w-5 h-5" />
+              Vị trí không hợp lệ (Đảo/Đá ngầm hoặc trùng lặp)
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    </div>
+  );
 };

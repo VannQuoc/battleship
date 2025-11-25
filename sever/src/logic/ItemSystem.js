@@ -36,54 +36,77 @@ module.exports = {
 
             case 'DRONE': // Quét 1 hàng hoặc 1 cột
                 {
+                    if (!opponent) throw new Error('No opponent found');
+                    
                     // Check Counter: ANTI_AIR
                     if (opponent.hasItem('ANTI_AIR')) {
                         opponent.removeItem('ANTI_AIR');
-                        return { type: 'BLOCKED', msg: 'Drone shot down by Anti-Air' };
+                        return { type: 'BLOCKED', msg: 'Drone bị bắn hạ bởi Anti-Air!' };
                     }
                     const { axis, index } = params; // axis: 'row'|'col', index: number
                     const found = [];
                     
+                    // row = scan horizontal (same x value), col = scan vertical (same y value)
                     opponent.fleet.forEach(u => {
-                        if (!u.isSunk && u.cells.some(c => (axis === 'row' ? c.y : c.x) === index)) {
-                            // Chỉ tiết lộ loại tàu và tọa độ tâm (approx location)
-                            found.push({ type: u.code, x: u.x, y: u.y }); 
+                        if (!u.isSunk && u.cells && u.cells.some(c => (axis === 'row' ? c.x : c.y) === index)) {
+                            // Tiết lộ loại tàu và tọa độ
+                            found.push({ type: u.code, x: u.x, y: u.y, name: u.definition?.name || u.code }); 
                         }
                     });
-                    result = { type: 'SCAN', findings: found };
+                    result = { type: 'SCAN', findings: found, axis, index };
                 }
                 break;
 
-            case 'ENGINE_BOOST': // Teleport 5 ô (Logic cập nhật từ v3)
+            case 'ENGINE_BOOST': // Teleport 5 ô + có thể xoay hướng
                 {
                     const unit = player.fleet.find(u => u.id === params.unitId);
                     if (!unit || unit.isSunk) throw new Error('Invalid Unit');
+                    if (unit.type === 'STRUCTURE') throw new Error('Cannot boost structures');
                     
                     // Kiểm tra khoảng cách tối đa 5 ô (Manhattan distance)
                     const dist = Math.abs(params.x - unit.x) + Math.abs(params.y - unit.y);
-                    if (dist > 5) throw new Error('Boost range exceeded');
+                    if (dist > 5) throw new Error('Boost range exceeded (max 5)');
 
-                    gameRoom.teleportUnit(player.id, unit.id, params.x, params.y);
+                    // params.rotate: true để xoay hướng thuyền
+                    const rotate = params.rotate || false;
+                    
+                    gameRoom.teleportUnit(player.id, unit.id, params.x, params.y, rotate);
            
-                    // [FIX 2B]: LỘ DIỆN NGAY (Set flag revealedTurns)
-                    // Tàu sẽ bị lộ trong lượt hiện tại và lượt kế tiếp (tùy logic, ở đây set = 1 lượt)
-                    unit.revealedTurns = 1; 
+                    // Tàu bị lộ 2 lượt khi dùng boost
+                    unit.revealedTurns = 2; 
 
-                    // Gửi event riêng để Client bên địch vẽ hiệu ứng lộ diện ngay lập tức
                     result = { 
                         type: 'TELEPORT', 
                         unitId: unit.id, 
                         x: params.x, 
-                        y: params.y, 
-                        isRevealed: true // Flag báo cho Client biết để vẽ icon mắt đỏ/lộ diện
+                        y: params.y,
+                        rotated: rotate,
+                        newVertical: unit.vertical, 
+                        isRevealed: true
                     };
-                    }
-                    break;
+                }
+                break;
 
             case 'DECOY': // Tạo thuyền giả
                 {
-                    const decoy = new Unit(`DECOY_${Date.now()}`, UNITS.DECOY_UNIT, params.x, params.y, params.vertical, player.id);
-                    // Decoy cần được thêm vào fleet của người chơi
+                    // Decoy definition inline (Size 2, HP 1, làm mồi nhử)
+                    const decoyDef = { 
+                        code: 'DECOY', 
+                        name: 'Mồi nhử', 
+                        size: 2, 
+                        hp: 1, 
+                        vision: 0, 
+                        cost: 0, 
+                        type: 'SHIP' 
+                    };
+                    const decoy = new Unit(
+                        `DECOY_${Date.now()}`, 
+                        decoyDef, 
+                        params.x, 
+                        params.y, 
+                        params.vertical || false, 
+                        player.id
+                    );
                     player.fleet.push(decoy);
                     result = { type: 'SPAWN_DECOY', x: params.x, y: params.y };
                 }
@@ -92,15 +115,19 @@ module.exports = {
             case 'BLACK_HAT': // Hack công trình (Đổi chủ)
                 {
                     // Check Counter: WHITE_HAT
-                    if (opponent.hasItem('WHITE_HAT')) {
+                    if (opponent && opponent.hasItem('WHITE_HAT')) {
                         opponent.removeItem('WHITE_HAT');
-                        // [FIX 2B]: LỘ VỊ TRÍ KẺ TẤN CÔNG
+                        // Lộ vị trí người dùng hacker (tàu đầu tiên còn sống của player)
+                        const hackerUnit = player.fleet.find(u => !u.isSunk && u.type === 'SHIP');
                         return { 
                             type: 'BLOCKED_TRAP', 
                             msg: 'Hacker detected by White Hat!',
-                            revealedLocation: { x: hackerUnit.x, y: hackerUnit.y } // Gửi tọa độ tàu hack cho địch
+                            revealedLocation: hackerUnit ? { x: hackerUnit.x, y: hackerUnit.y } : null
                         };
                     }
+                    
+                    if (!opponent) throw new Error('No opponent found');
+                    
                     const targetStruct = opponent.fleet.find(u => u.id === params.targetId && u.type === 'STRUCTURE');
                     if (!targetStruct) throw new Error('Invalid Structure');
                     
@@ -128,6 +155,8 @@ module.exports = {
             
             case 'SUICIDE_SQUAD': // NEW ITEM: Lính cảm tử ném vào địch, nổ 3x3 (Logic từ v3)
                 {
+                    if (!opponent) throw new Error('No opponent found');
+                    
                     // params: { x, y } - Tọa độ ném tâm nổ
                     const targetX = params.x;
                     const targetY = params.y;
@@ -186,21 +215,27 @@ module.exports = {
             case 'SELF_DESTRUCT': // Kỹ năng cảm tử của một Unit (KHÔNG phải Item shop)
                 {
                     const unit = player.fleet.find(u => u.id === params.unitId);
-                    // Điều kiện: Unit phải đang ở ngưỡng Critical (ví dụ: máu thấp hơn 30%)
+                    // Điều kiện: Unit phải đang ở ngưỡng Critical (ví dụ: máu thấp hơn 50%)
                     if (!unit || unit.hp > unit.maxHp * CONSTANTS.CRITICAL_THRESHOLD) throw new Error('Condition not met');
+                    
+                    const unitX = unit.x;
+                    const unitY = unit.y;
                     
                     unit.takeDamage(999); // Tự hủy ngay lập tức
                     
                     // Gây dmg 3x3 xung quanh vị trí nổ
                     const radius = 1; 
                     const hits = [];
-                    opponent.fleet.forEach(u => {
-                        if (!u.isSunk && Math.abs(u.x - unit.x) <= radius && Math.abs(u.y - unit.y) <= radius) {
-                            const status = u.takeDamage(CONSTANTS.SUICIDE_DAMAGE || 5); // Gây 5 dmg (mặc định nếu không có CONSTANT)
-                            hits.push({ unitId: u.id, status });
-                        }
-                    });
-                    result = { type: 'SUICIDE_EXPLOSION', x: unit.x, y: unit.y, hits };
+                    
+                    if (opponent && opponent.fleet) {
+                        opponent.fleet.forEach(u => {
+                            if (!u.isSunk && Math.abs(u.x - unitX) <= radius && Math.abs(u.y - unitY) <= radius) {
+                                const status = u.takeDamage(CONSTANTS.SUICIDE_DAMAGE || 5);
+                                hits.push({ unitId: u.id, status });
+                            }
+                        });
+                    }
+                    result = { type: 'SUICIDE_EXPLOSION', x: unitX, y: unitY, hits };
                 }
                 break;
 
