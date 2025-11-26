@@ -25,7 +25,8 @@ class Player {
     // Active Effects
     this.activeEffects = {
         jammer: 0,
-        admiralVision: 0
+        admiralVision: 0,
+        whiteHat: null,
     };
   }
 
@@ -66,6 +67,7 @@ class Player {
         itemDef = UNITS[itemId];
     }
 
+    if (itemId === 'NUKE') return false;
     if (!itemDef) return false;
     
     // Tính giá (Engineer giảm giá Structure)

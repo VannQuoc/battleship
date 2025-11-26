@@ -114,29 +114,62 @@ module.exports = {
 
             case 'BLACK_HAT': // Hack công trình (Đổi chủ)
                 {
-                    // Check Counter: WHITE_HAT
-                    if (opponent && opponent.hasItem('WHITE_HAT')) {
-                        opponent.removeItem('WHITE_HAT');
-                        // Lộ vị trí người dùng hacker (tàu đầu tiên còn sống của player)
-                        const hackerUnit = player.fleet.find(u => !u.isSunk && u.type === 'SHIP');
-                        return { 
-                            type: 'BLOCKED_TRAP', 
-                            msg: 'Hacker detected by White Hat!',
-                            revealedLocation: hackerUnit ? { x: hackerUnit.x, y: hackerUnit.y } : null
-                        };
+                    if (!params.hackerId) throw new Error('Missing hacker platform');
+                    const hackerUnit = player.fleet.find(u => u.id === params.hackerId && !u.isSunk && u.type === 'SHIP');
+                    if (!hackerUnit) throw new Error('Invalid Hacker platform');
+
+                    let targetStruct = null;
+                    let targetOwner = null;
+                    for (const pid in gameRoom.players) {
+                        const candidateOwner = gameRoom.players[pid];
+                        const candidate = candidateOwner.fleet.find(u => u.id === params.targetId);
+                        if (candidate) {
+                            targetStruct = candidate;
+                            targetOwner = candidateOwner;
+                            break;
+                        }
                     }
-                    
-                    if (!opponent) throw new Error('No opponent found');
-                    
-                    const targetStruct = opponent.fleet.find(u => u.id === params.targetId && u.type === 'STRUCTURE');
-                    if (!targetStruct) throw new Error('Invalid Structure');
-                    
-                    // Logic đổi chủ: Xóa khỏi fleet địch, thêm vào fleet mình, đổi ownerId
-                    opponent.fleet = opponent.fleet.filter(u => u.id !== params.targetId);
+
+                    if (!targetStruct || targetStruct.type !== 'STRUCTURE') throw new Error('Invalid Structure');
+                    if (!targetOwner || targetOwner.id === player.id) throw new Error('Cannot hack own structure');
+
+                    const whiteHat = targetOwner.activeEffects.whiteHat;
+                    if (whiteHat && gameRoom.chebyshevDistance(targetStruct.x, targetStruct.y, whiteHat.x, whiteHat.y) <= whiteHat.range) {
+                        return { type: 'BLOCKED_WHITE_HAT', msg: 'White Hat chặn Hacker!' };
+                    }
+
+                    targetOwner.fleet = targetOwner.fleet.filter(u => u.id !== targetStruct.id);
                     targetStruct.ownerId = player.id;
+                    hackerUnit.revealedTurns = Math.max(hackerUnit.revealedTurns || 0, 2);
                     player.fleet.push(targetStruct);
                     
                     result = { type: 'HACK_SUCCESS', structureId: targetStruct.id };
+                }
+                break;
+
+            case 'WHITE_HAT':
+                {
+                    const x = Number(params.x);
+                    const y = Number(params.y);
+                    if (Number.isNaN(x) || Number.isNaN(y)) throw new Error('Invalid coordinates');
+                    player.activeEffects.whiteHat = {
+                        x,
+                        y,
+                        range: CONSTANTS.WHITE_HAT_RANGE,
+                        turnsLeft: CONSTANTS.WHITE_HAT_TURNS,
+                    };
+                    result = { type: 'WHITE_HAT_DEPLOYED', x, y, duration: CONSTANTS.WHITE_HAT_TURNS };
+                }
+                break;
+
+            case 'RADAR':
+                {
+                    const unit = player.fleet.find(u => u.id === params.unitId);
+                    if (!unit || unit.isSunk) throw new Error('Invalid Unit');
+                    unit.hasRadar = true;
+                    unit.radarRange = CONSTANTS.RADAR_RANGE;
+                    gameRoom.revealSubmarinesAround(unit.x, unit.y, unit.radarRange, player.id);
+                    result = { type: 'RADAR_DEPLOYED', unitId: unit.id, range: unit.radarRange };
                 }
                 break;
 
@@ -206,10 +239,16 @@ module.exports = {
                 }
                 break;
 
-            case 'JAMMER': // Gây nhiễu sóng trong 3 turn
-                // Hiệu ứng này thường được xử lý ở GameRoom trước khi gọi ItemSystem
-                player.activeEffects.jammer = 3; 
-                result = { type: 'JAMMER_ACTIVE' };
+            case 'JAMMER':
+                {
+                    if (!params.unitId) throw new Error('Jammer must be installed on a unit');
+                    const unit = player.fleet.find(u => u.id === params.unitId);
+                    if (!unit || unit.isSunk) throw new Error('Invalid Unit');
+                    unit.jammerTurns = 3;
+                    player.activeEffects.jammer = 3;
+                    const disrupted = gameRoom.disruptRadarsAround(unit.x, unit.y, CONSTANTS.JAMMER_DISRUPT_RANGE);
+                    result = { type: 'JAMMER_ACTIVE', disrupted };
+                }
                 break;
                 
             case 'SELF_DESTRUCT': // Kỹ năng cảm tử của một Unit (KHÔNG phải Item shop)

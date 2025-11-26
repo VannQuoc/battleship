@@ -14,6 +14,10 @@ module.exports = {
     // Map size scaling: base + (players * multiplier)
     MAP_SIZE_BASE: 20,
     MAP_SIZE_PER_PLAYER: 5,
+    RADAR_RANGE: 2,
+    WHITE_HAT_RANGE: 2,
+    WHITE_HAT_TURNS: 3,
+    JAMMER_DISRUPT_RANGE: 2,
   },
 
   // V2.0: ĐỊNH NGHĨA ĐỊA HÌNH
@@ -73,7 +77,6 @@ module.exports = {
     // --- PASSIVE ---
     ANTI_AIR: { id: 'ANTI_AIR', name: 'Tên lửa PK', type: 'PASSIVE', cost: 200, counter: 'AIR' },
     FLARES: { id: 'FLARES', name: 'Bẫy Nhiệt', type: 'PASSIVE', cost: 150, counter: 'MISSILE' },
-    WHITE_HAT: { id: 'WHITE_HAT', name: 'Hacker Mũ Trắng', type: 'PASSIVE', cost: 300, counter: 'HACK' },
 
     // --- ACTIVE ---
     REPAIR_KIT: { id: 'REPAIR_KIT', name: 'Bộ Sửa Chữa', type: 'ACTIVE', cost: 200 },
@@ -83,6 +86,8 @@ module.exports = {
     BLACK_HAT: { id: 'BLACK_HAT', name: 'Hacker Đen', type: 'ACTIVE', cost: 600 },
     ENGINE_BOOST: { id: 'ENGINE_BOOST', name: 'Động Cơ Phụ', type: 'ACTIVE', cost: 200 },
     JAMMER: { id: 'JAMMER', name: 'Phá Sóng', type: 'ACTIVE', cost: 400 },
+    RADAR: { id: 'RADAR', name: 'Radar', type: 'ACTIVE', cost: 500 },
+    WHITE_HAT: { id: 'WHITE_HAT', name: 'Hacker Trắng', type: 'ACTIVE', cost: 300 },
     DECOY: { id: 'DECOY', name: 'Xuồng Cứu Hộ', type: 'ACTIVE', cost: 100 },
     NUKE: { id: 'NUKE', name: 'Đầu đạn HN', type: 'ACTIVE', cost: 2000, reqSilo: true },
     

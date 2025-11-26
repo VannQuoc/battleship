@@ -2,6 +2,7 @@
 import { create } from 'zustand';
 import { io, Socket } from 'socket.io-client';
 import toast from 'react-hot-toast';
+import { UNIT_DEFINITIONS } from '../config/constants';
 import type {
   GameStatus,
   GameConfig,
@@ -14,6 +15,8 @@ import type {
   ItemUseParams,
   PublicPlayer,
   LobbyData,
+  ShotMarker,
+  DroneScanMarker,
 } from '../types';
 
 // ============================================================
@@ -41,6 +44,8 @@ interface GameStore {
 
   // Effects State
   lastEffect: EffectTrigger | null;
+  recentShots: ShotMarker[];
+  droneMarkers: DroneScanMarker[];
 
   // Winner State
   winner: string | null;
@@ -83,6 +88,8 @@ const initialState = {
   players: {} as Record<string, PublicPlayer>,
   logs: [],
   lastEffect: null,
+  recentShots: [],
+  droneMarkers: [],
   winner: null,
   winReason: null,
 };
@@ -90,8 +97,11 @@ const initialState = {
 // ============================================================
 // STORE IMPLEMENTATION
 // ============================================================
-export const useGameStore = create<GameStore>((set, get) => ({
-  ...initialState,
+export const useGameStore = create<GameStore>((set, get) => {
+  let droneMarkerTimer: ReturnType<typeof setTimeout> | null = null;
+
+  return {
+    ...initialState,
 
   // ==========================================================
   // CONNECTION
@@ -220,6 +230,14 @@ export const useGameStore = create<GameStore>((set, get) => ({
       logs: LogEntry[];
       config?: GameConfig;
     }) => {
+      const shotLogs = state.logs
+        .filter((log) => typeof log.x === 'number' && typeof log.y === 'number')
+        .slice(-10)
+        .map((log) => ({
+          x: log.x as number,
+          y: log.y as number,
+          turn: log.turn ?? 0,
+        }));
       set({
         status: state.status,
         mapData: state.mapData,
@@ -229,6 +247,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         opponent: state.opponent,
         players: state.players || {},
         logs: state.logs,
+        recentShots: shotLogs,
         config: state.config || get().config,
       });
     });
@@ -245,6 +264,34 @@ export const useGameStore = create<GameStore>((set, get) => ({
     socket.on('effect_trigger', (data: EffectTrigger) => {
       set({ lastEffect: data });
       handleEffectToast(data);
+
+      if (data.type === 'ITEM_USE' && data.itemId === 'DRONE' && data.findings?.length) {
+        const markers: DroneScanMarker[] = data.findings.map((finding, index) => {
+          const def = UNIT_DEFINITIONS[finding.type || ''];
+          const isStructure = def?.type === 'STRUCTURE';
+          const icon = isStructure ? '🏗️' : '⚓';
+          const colorClass = isStructure
+            ? 'bg-purple-500/90 text-white border-purple-300/50'
+            : 'bg-cyan-500/90 text-slate-900 border-cyan-500/70';
+          return {
+            id: `${finding.x}-${finding.y}-${Date.now()}-${index}`,
+            x: finding.x,
+            y: finding.y,
+            icon,
+            title: `${finding.name || finding.type || 'Mục tiêu'} (${def?.type ?? 'UNIT'})`,
+            colorClass,
+          };
+        });
+        set({ droneMarkers: markers });
+        if (droneMarkerTimer) {
+          clearTimeout(droneMarkerTimer);
+        }
+        droneMarkerTimer = setTimeout(() => {
+          set({ droneMarkers: [] });
+          droneMarkerTimer = null;
+        }, 15000);
+      }
+
       setTimeout(() => set({ lastEffect: null }), 2000);
     });
 
@@ -380,7 +427,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (socket) socket.disconnect();
     set({ ...initialState });
   },
-}));
+  };
+});
 
 // ============================================================
 // HELPER FUNCTIONS

@@ -46,6 +46,24 @@ export interface Unit {
 }
 
 // ============================================================
+// MARKER TYPES
+// ============================================================
+export interface ShotMarker {
+  x: number;
+  y: number;
+  turn?: number;
+}
+
+export interface DroneScanMarker {
+  id: string;
+  x: number;
+  y: number;
+  icon: string;
+  title: string;
+  colorClass: string;
+}
+
+// ============================================================
 // INVENTORY (New format: Object with counts)
 // ============================================================
 export type InventoryObject = Record<string, number>; // { 'NUKE': 2, 'DRONE': 3 }

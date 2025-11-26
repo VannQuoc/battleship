@@ -507,6 +507,57 @@ class GameRoom {
         return false;
     }
 
+  chebyshevDistance(x1, y1, x2, y2) {
+      return Math.max(Math.abs(x1 - x2), Math.abs(y1 - y2));
+  }
+
+  revealSubmarinesAround(x, y, range, ownerId) {
+      for (const pid in this.players) {
+          if (pid === ownerId) continue;
+          const player = this.players[pid];
+          player.fleet.forEach(unit => {
+              if (unit.isSunk) return;
+              if (unit.type !== 'SHIP') return;
+              if (!unit.definition?.isStealth) return;
+              if (this.chebyshevDistance(unit.x, unit.y, x, y) <= range) {
+                  unit.revealedTurns = Math.max(unit.revealedTurns || 0, 3);
+              }
+          });
+      }
+  }
+
+  disruptRadarsAround(x, y, range) {
+      const destroyed = [];
+      for (const pid in this.players) {
+          const player = this.players[pid];
+          player.fleet.forEach(unit => {
+              if (unit.hasRadar && !unit.isSunk) {
+                  if (this.chebyshevDistance(unit.x, unit.y, x, y) <= range) {
+                      unit.hasRadar = false;
+                      unit.radarRange = 0;
+                      destroyed.push(unit.id);
+                  }
+              }
+          });
+      }
+      return destroyed;
+  }
+
+  processRadars() {
+      for (const pid in this.players) {
+          const player = this.players[pid];
+          player.fleet.forEach(unit => {
+              if (unit.isSunk) return;
+              if (unit.hasRadar && unit.radarRange > 0) {
+                  this.revealSubmarinesAround(unit.x, unit.y, unit.radarRange, pid);
+              }
+              if (unit.jammerTurns > 0) {
+                  unit.jammerTurns--;
+              }
+          });
+      }
+  }
+
     /**
      * Deploy a structure during battle (từ inventory)
      */
@@ -600,6 +651,12 @@ class GameRoom {
         // Reduce active effects
         if (player.activeEffects.jammer > 0) player.activeEffects.jammer--;
         if (player.activeEffects.admiralVision > 0) player.activeEffects.admiralVision--;
+        if (player.activeEffects.whiteHat) {
+            player.activeEffects.whiteHat.turnsLeft--;
+            if (player.activeEffects.whiteHat.turnsLeft <= 0) {
+                player.activeEffects.whiteHat = null;
+            }
+        }
 
         // Unit passives
         player.fleet.forEach(u => {
@@ -659,6 +716,7 @@ class GameRoom {
             }
             return true;
         });
+        this.processRadars();
     }
 
     getStateFor(playerId, revealAll = false) {

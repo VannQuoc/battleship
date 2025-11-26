@@ -5,7 +5,7 @@ import { TERRAIN, UNIT_DEFINITIONS } from '../../config/constants';
 import { UnitRenderer } from './UnitRenderer';
 import { clsx } from 'clsx';
 import { motion, AnimatePresence } from 'framer-motion';
-import type { Unit, TerrainType } from '../../types';
+import type { DroneScanMarker, ShotMarker, Unit, TerrainType } from '../../types';
 
 // ============================================================
 // TYPES
@@ -33,6 +33,8 @@ interface MapProps {
   me?: { fleet: Unit[] } | null;
   previewPlacement?: PreviewPlacement | null;
   dronePreview?: DronePreview;
+  shotMarkers?: ShotMarker[];
+  droneMarkers?: DroneScanMarker[];
 }
 
 // ============================================================
@@ -53,6 +55,8 @@ interface CellProps {
   interactive: boolean;
   hoverMode: MapProps['hoverMode'];
   isDeployMode: boolean;
+  shotMarker?: ShotMarker;
+  droneMarker?: DroneScanMarker;
   onClick: () => void;
   onHover: () => void;
 }
@@ -67,6 +71,8 @@ const Cell = memo(function Cell({
   interactive,
   hoverMode,
   isDeployMode,
+  shotMarker,
+  droneMarker,
   onClick,
   onHover,
 }: CellProps) {
@@ -107,6 +113,23 @@ const Cell = memo(function Cell({
       style={{ width: CELL_SIZE, height: CELL_SIZE }}
     >
       {content}
+      {droneMarker && (
+        <div
+          className={clsx(
+            'absolute top-1 left-1 px-1 rounded-full border text-[10px] font-bold flex items-center justify-center pointer-events-none text-center leading-none drop-shadow',
+            droneMarker.colorClass
+          )}
+          title={droneMarker.title}
+        >
+          {droneMarker.icon}
+        </div>
+      )}
+      {shotMarker && (
+        <div
+          className="absolute bottom-1 right-1 w-3 h-3 rounded-full bg-red-500/80 border border-red-300/70 pointer-events-none animate-pulse"
+          title={`Đã bắn: T${shotMarker.turn ?? '?'}`}
+        />
+      )}
     </div>
   );
 });
@@ -124,6 +147,8 @@ export const GameMap = ({
   me,
   previewPlacement,
   dronePreview,
+  shotMarkers,
+  droneMarkers,
 }: MapProps) => {
   const storeData = useGameStore();
   const { mapData, opponent, lastEffect, playerId } = storeData;
@@ -132,12 +157,6 @@ export const GameMap = ({
   const currentMe = me || storeData.me;
   const myFleet = currentMe?.fleet || [];
   
-  // Filter out null/undefined opponent units (fog of war filtering from server)
-  const opponentFleet = useMemo(() => {
-    if (!opponent?.fleet) return [];
-    return opponent.fleet.filter((u): u is Unit => u !== null && u !== undefined && !u.isSunk);
-  }, [opponent?.fleet]);
-
   const [hoverPos, setHoverPos] = useState<{ x: number; y: number } | null>(null);
 
   // --- Loading State ---
@@ -150,6 +169,24 @@ export const GameMap = ({
   }
 
   const mapSize = mapData.length;
+
+  const shotMap = useMemo(() => {
+    const map = new Map<string, ShotMarker>();
+    shotMarkers?.forEach((marker) => {
+      const key = `${marker.x},${marker.y}`;
+      map.set(key, marker);
+    });
+    return map;
+  }, [shotMarkers]);
+
+  const droneMap = useMemo(() => {
+    const map = new Map<string, DroneScanMarker>();
+    droneMarkers?.forEach((marker) => {
+      const key = `${marker.x},${marker.y}`;
+      map.set(key, marker);
+    });
+    return map;
+  }, [droneMarkers]);
 
   // --- Calculate Visible Cells (Fog of War) ---
   const visibleCells = useMemo(() => {
@@ -174,6 +211,21 @@ export const GameMap = ({
 
     return visible;
   }, [myFleet, mapSize]);
+
+  // Filter opponent units based on actual visibility (extra safety)
+  const opponentFleet = useMemo(() => {
+    if (!opponent?.fleet) return [];
+    return opponent.fleet.filter((u): u is Unit => {
+      if (!u || u.isSunk) return false;
+      if (u.alwaysVisible || u.isRevealed || (u.revealedTurns && u.revealedTurns > 0)) {
+        return true;
+      }
+      if (u.cells?.some((cell) => visibleCells.has(`${cell.x},${cell.y}`))) {
+        return true;
+      }
+      return false;
+    });
+  }, [opponent?.fleet, visibleCells]);
 
   // --- Drone Preview Cells ---
   const dronePreviewCells = useMemo(() => {
@@ -260,6 +312,8 @@ export const GameMap = ({
                 interactive={interactive}
                 hoverMode={hoverMode}
                 isDeployMode={isDeployMode}
+                shotMarker={shotMap.get(cellKey)}
+                droneMarker={droneMap.get(cellKey)}
                 onClick={() => handleCellClick(x, y)}
                 onHover={() => handleCellHover(x, y)}
               />

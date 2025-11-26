@@ -184,16 +184,14 @@ export const ITEMS: Record<string, ItemDefinition> = {
     counter: 'MISSILE',
     desc: 'Chặn skill dạng tên lửa (Future)',
   },
+  // --- ACTIVE ITEMS ---
   WHITE_HAT: {
     id: 'WHITE_HAT',
     name: 'Hacker Mũ Trắng',
-    type: 'PASSIVE',
+    type: 'ACTIVE',
     cost: 300,
-    counter: 'HACK',
-    desc: 'Chặn Black Hat & lộ vị trí kẻ hack',
+    desc: 'Đặt White Hat tại ô để chặn Hacker Đen trong 3 lượt',
   },
-
-  // --- ACTIVE ITEMS ---
   REPAIR_KIT: {
     id: 'REPAIR_KIT',
     name: 'Bộ Sửa Chữa',
@@ -227,7 +225,14 @@ export const ITEMS: Record<string, ItemDefinition> = {
     name: 'Thiết Bị Phá Sóng',
     type: 'ACTIVE',
     cost: 400,
-    desc: 'Gây nhiễu địch trong 3 lượt',
+    desc: 'Gắn lên tàu/công trình để phá sóng radar đối phương (3 lượt)',
+  },
+  RADAR: {
+    id: 'RADAR',
+    name: 'Radar Đồn Đáp',
+    type: 'ACTIVE',
+    cost: 500,
+    desc: 'Gắn lên tàu/công trình để phát hiện tàu ngầm trong vùng 5x5',
   },
   MERCENARY: {
     id: 'MERCENARY',

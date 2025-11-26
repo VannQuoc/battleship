@@ -41,6 +41,10 @@ class Unit {
     this.isStealth = this.type === 'SHIP' ? true : (definition.isStealth || false);
     this.alwaysVisible = this.type === 'STRUCTURE' ? (definition.alwaysVisible || false) : false;
 
+    this.hasRadar = false;
+    this.radarRange = 0;
+    this.jammerTurns = 0;
+
     // Passive Logic vars
     this.turnCounter = 0; 
     this.revealedTurns = 0;

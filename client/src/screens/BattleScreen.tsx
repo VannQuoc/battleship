@@ -29,15 +29,41 @@ import {
   ChevronRight,
   Users,
   Map as MapIcon,
+  Shield,
   Trash2,
 } from 'lucide-react';
 import type { Unit, ItemUseParams, InventoryObject } from '../types';
 
-type BattleMode = 'SELECT' | 'MOVE' | 'ATTACK' | 'ITEM' | 'ENGINE_BOOST_SELECT_UNIT' | 'ENGINE_BOOST_SELECT_DEST' | 'MERCENARY_SELECT' | 'BLACK_HAT_SELECT' | 'REPAIR_SELECT' | 'DEPLOY_STRUCTURE';
+type BattleMode =
+  | 'SELECT'
+  | 'MOVE'
+  | 'ATTACK'
+  | 'ITEM'
+  | 'ENGINE_BOOST_SELECT_UNIT'
+  | 'ENGINE_BOOST_SELECT_DEST'
+  | 'MERCENARY_SELECT'
+  | 'BLACK_HAT_SOURCE'
+  | 'BLACK_HAT_TARGET'
+  | 'WHITE_HAT_PLACE'
+  | 'RADAR_SELECT_UNIT'
+  | 'JAMMER_SELECT_UNIT'
+  | 'REPAIR_SELECT'
+  | 'DEPLOY_STRUCTURE';
 
 interface ItemModalData {
   itemId: string;
-  requiresTarget: 'unit' | 'enemy_unit' | 'enemy_structure' | 'cell' | 'row_col' | 'none';
+  requiresTarget:
+    | 'unit'
+    | 'enemy_unit'
+    | 'enemy_structure'
+    | 'cell'
+    | 'row_col'
+    | 'none'
+    | 'black_hat_source'
+    | 'black_hat_target'
+    | 'white_hat_cell'
+    | 'radar_unit'
+    | 'jammer_unit';
 }
 
 export const BattleScreen = () => {
@@ -54,6 +80,8 @@ export const BattleScreen = () => {
     mapData,
     logs,
     config,
+    recentShots,
+    droneMarkers,
   } = useGameStore();
 
   const isMyTurn = useIsMyTurn();
@@ -68,6 +96,8 @@ export const BattleScreen = () => {
   const [engineBoostRotate, setEngineBoostRotate] = useState(false);
   const [hoverCell, setHoverCell] = useState<{x: number, y: number} | null>(null);
   const [deployingStructure, setDeployingStructure] = useState<string | null>(null);
+  const [blackHatCarrier, setBlackHatCarrier] = useState<string | null>(null);
+  const [structureOrientation, setStructureOrientation] = useState(false);
 
   // Filter out null opponent units (fog of war)
   const visibleOpponentFleet = useMemo(() => {
@@ -78,6 +108,11 @@ export const BattleScreen = () => {
   const selectedUnit = useMemo(
     () => me?.fleet.find((u) => u.id === selectedUnitId),
     [me?.fleet, selectedUnitId]
+  );
+
+  const selectedUnitDef = useMemo(
+    () => (selectedUnit ? UNIT_DEFINITIONS[selectedUnit.code] : undefined),
+    [selectedUnit]
   );
 
   const isCritical = useMemo(() => {
@@ -221,6 +256,78 @@ export const BattleScreen = () => {
         return;
       }
 
+      // BLACK_HAT: select carrier ship first
+      if (mode === 'BLACK_HAT_SOURCE') {
+        const carrier = me?.fleet.find((u) =>
+          !u.isSunk &&
+          u.type === 'SHIP' &&
+          ((u.x === x && u.y === y) || u.cells?.some((c) => c.x === x && c.y === y))
+        );
+        if (carrier) {
+          setBlackHatCarrier(carrier.id);
+          setMode('BLACK_HAT_TARGET');
+          toast.success('Chọn công trình địch để hack!', { icon: '💻' });
+        } else {
+          toast.error('Chọn một tàu của bạn để trang bị Hacker.');
+        }
+        return;
+      }
+
+      // BLACK_HAT: select enemy target after carrier
+      if (mode === 'BLACK_HAT_TARGET' && blackHatCarrier) {
+        const enemyStruct = visibleOpponentFleet.find((u) =>
+          !u.isSunk &&
+          u.type === 'STRUCTURE' &&
+          ((u.x === x && u.y === y) || u.cells?.some((c) => c.x === x && c.y === y))
+        );
+        if (enemyStruct) {
+          handleItemUseWithParams('BLACK_HAT', { hackerId: blackHatCarrier, targetId: enemyStruct.id });
+          setBlackHatCarrier(null);
+        } else {
+          toast.error('Chọn một công trình địch lộ diện để Hack.');
+        }
+        return;
+      }
+
+      // WHITE_HAT: place on map
+      if (mode === 'WHITE_HAT_PLACE') {
+        const terrain = mapData?.[x]?.[y];
+        if (terrain === TERRAIN.ISLAND) {
+          toast.error('Không thể đặt White Hat lên đảo!');
+          return;
+        }
+        handleItemUseWithParams('WHITE_HAT', { x, y });
+        return;
+      }
+
+      // RADAR: select own unit to install
+      if (mode === 'RADAR_SELECT_UNIT') {
+        const ownUnit = me?.fleet.find((u) =>
+          !u.isSunk &&
+          ((u.x === x && u.y === y) || u.cells?.some((c) => c.x === x && c.y === y))
+        );
+        if (ownUnit) {
+          handleItemUseWithParams('RADAR', { unitId: ownUnit.id });
+        } else {
+          toast.error('Chọn tàu hoặc công trình của bạn để gắn radar.');
+        }
+        return;
+      }
+
+      // JAMMER: select own unit to deploy jammer
+      if (mode === 'JAMMER_SELECT_UNIT') {
+        const ownUnit = me?.fleet.find((u) =>
+          !u.isSunk &&
+          ((u.x === x && u.y === y) || u.cells?.some((c) => c.x === x && c.y === y))
+        );
+        if (ownUnit) {
+          handleItemUseWithParams('JAMMER', { unitId: ownUnit.id });
+        } else {
+          toast.error('Chọn tàu hoặc công trình của bạn để kích hoạt phá sóng.');
+        }
+        return;
+      }
+
       // MOVE mode
       if (mode === 'MOVE' && selectedUnitId) {
         if (validMoves.includes(`${x},${y}`)) {
@@ -294,11 +401,12 @@ export const BattleScreen = () => {
             structureCode: deployingStructure, 
             x, 
             y, 
-            vertical: false 
+            vertical: structureOrientation 
           });
         }
         setMode('SELECT');
         setDeployingStructure(null);
+        setStructureOrientation(false);
         return;
       }
 
@@ -417,9 +525,27 @@ export const BattleScreen = () => {
         return;
 
       case 'BLACK_HAT':
-        setSelectedItem({ itemId, requiresTarget: 'enemy_structure' });
-        setMode('BLACK_HAT_SELECT');
-        toast('Chọn công trình địch trên bản đồ!', { icon: '💻' });
+        setSelectedItem({ itemId, requiresTarget: 'black_hat_source' });
+        setMode('BLACK_HAT_SOURCE');
+        toast('Chọn tàu của bạn để trang bị Hacker!', { icon: '💻' });
+        return;
+
+      case 'WHITE_HAT':
+        setSelectedItem({ itemId, requiresTarget: 'white_hat_cell' });
+        setMode('WHITE_HAT_PLACE');
+        toast('Chọn tọa độ để đặt White Hat!', { icon: '🛡️' });
+        return;
+
+      case 'RADAR':
+        setSelectedItem({ itemId, requiresTarget: 'radar_unit' });
+        setMode('RADAR_SELECT_UNIT');
+        toast('Chọn tàu/công trình để gắn Radar!', { icon: '📡' });
+        return;
+
+      case 'JAMMER':
+        setSelectedItem({ itemId, requiresTarget: 'jammer_unit' });
+        setMode('JAMMER_SELECT_UNIT');
+        toast('Chọn tàu/công trình để kích hoạt Jammer!', { icon: '📻' });
         return;
 
       case 'DRONE':
@@ -456,14 +582,16 @@ export const BattleScreen = () => {
     }
   };
 
-  const cancelAction = () => {
+  const cancelAction = useCallback(() => {
     setMode('SELECT');
     setSelectedUnitId(null);
     setSelectedItem(null);
     setEngineBoostUnitId(null);
     setEngineBoostRotate(false);
     setDeployingStructure(null);
-  };
+    setStructureOrientation(false);
+    setBlackHatCarrier(null);
+  }, []);
 
   // ESC key to cancel any action
   useEffect(() => {
@@ -471,15 +599,18 @@ export const BattleScreen = () => {
       if (e.key === 'Escape') {
         cancelAction();
       }
+      if ((e.key === 'r' || e.key === 'R') && mode === 'DEPLOY_STRUCTURE') {
+        setStructureOrientation((prev) => !prev);
+      }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [mode, cancelAction]);
 
   // Shop items available during battle (items + structures)
   const shopItems = useMemo(() => {
-    const items = Object.entries(ITEMS).filter(([_, item]) => 
-      item.type === 'ACTIVE' || item.type === 'PASSIVE'
+    const items = Object.entries(ITEMS).filter(([id, item]) =>
+      (item.type === 'ACTIVE' || item.type === 'PASSIVE') && id !== 'NUKE'
     );
     // Add structures that can be bought
     const structures = Object.entries(UNIT_DEFINITIONS).filter(([_, def]) => 
@@ -503,6 +634,7 @@ export const BattleScreen = () => {
   const handleDeployStructure = (structureCode: string) => {
     setDeployingStructure(structureCode);
     setMode('DEPLOY_STRUCTURE');
+    setStructureOrientation(false);
     toast('Chọn vị trí đặt công trình trên bản đồ!', { icon: '🏗️' });
   };
 
@@ -727,7 +859,21 @@ export const BattleScreen = () => {
             validMoves={mode === 'ENGINE_BOOST_SELECT_DEST' ? engineBoostMoves : validMoves}
             selectedUnitId={selectedUnitId || engineBoostUnitId}
             dronePreview={selectedItem?.itemId === 'DRONE' ? { axis: droneAxis, index: droneIndex } : undefined}
+            shotMarkers={recentShots}
+            droneMarkers={droneMarkers}
           />
+
+          {/* Overlay Legend */}
+          <div className="absolute bottom-4 left-4 flex gap-3 text-[10px] text-slate-300 bg-slate-900/80 border border-slate-800 rounded-full px-3 py-1">
+            <div className="flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-red-500/80 border border-red-300/70" />
+              <span>Vị trí đã bắn (10 lượt)</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <span className="text-[12px]">⚓</span>
+              <span>Drone tô màu mục tiêu</span>
+            </div>
+          </div>
 
           {/* Unit Action Panel */}
           <AnimatePresence>
@@ -813,6 +959,41 @@ export const BattleScreen = () => {
                     <X className="w-5 h-5" />
                   </button>
                 </div>
+                <div className="px-4 pb-4">
+                  <div className="grid grid-cols-3 gap-2 text-[10px] text-slate-400">
+                    <div>
+                      <span className="text-slate-500">Vision:</span>{' '}
+                      <span className="text-white">{selectedUnitDef?.vision ?? '—'}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500">Move:</span>{' '}
+                      <span className="text-white">{selectedUnitDef?.move ?? '—'}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500">Cells:</span>{' '}
+                      <span className="text-white">{selectedUnit.cells?.length ?? selectedUnitDef?.size ?? '—'}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500">Loại:</span>{' '}
+                      <span className="text-white">{selectedUnit.type}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500">Vị trí:</span>{' '}
+                      <span className="text-white">({selectedUnit.x},{selectedUnit.y})</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500">Trạng thái:</span>{' '}
+                      <span className="text-white">
+                        {selectedUnit.isImmobilized ? 'Động cơ hỏng' : isCritical ? 'Critical' : 'Sẵn sàng'}
+                      </span>
+                    </div>
+                  </div>
+                  {selectedUnitDef?.desc && (
+                    <p className="mt-2 text-[10px] italic text-slate-500">
+                      {selectedUnitDef.desc}
+                    </p>
+                  )}
+                </div>
               </motion.div>
             )}
           </AnimatePresence>
@@ -871,16 +1052,57 @@ export const BattleScreen = () => {
                   <span>Chọn tàu địch làm mục tiêu</span>
                 </>
               )}
-              {mode === 'BLACK_HAT_SELECT' && (
+              {mode === 'BLACK_HAT_SOURCE' && (
                 <>
                   <Zap className="w-5 h-5 text-purple-400" />
+                  <span>Chọn tàu của bạn để gắn Hacker</span>
+                </>
+              )}
+              {mode === 'BLACK_HAT_TARGET' && (
+                <>
+                  <Zap className="w-5 h-5 text-red-400" />
                   <span>Chọn công trình địch để hack</span>
+                </>
+              )}
+              {mode === 'WHITE_HAT_PLACE' && (
+                <>
+                  <Shield className="w-5 h-5 text-emerald-400" />
+                  <span>Chọn ô để đặt White Hat</span>
+                </>
+              )}
+              {mode === 'RADAR_SELECT_UNIT' && (
+                <>
+                  <Radio className="w-5 h-5 text-indigo-400" />
+                  <span>Chọn tàu/công trình để gắn Radar</span>
+                </>
+              )}
+              {mode === 'JAMMER_SELECT_UNIT' && (
+                <>
+                  <Zap className="w-5 h-5 text-sky-400" />
+                  <span>Chọn tàu/công trình để kích hoạt Jammer</span>
                 </>
               )}
               {mode === 'ITEM' && selectedItem?.requiresTarget === 'cell' && (
                 <>
                   <Package className="w-5 h-5 text-yellow-400" />
                   <span>Chọn vị trí cho {getItemName(selectedItem.itemId)}</span>
+                </>
+              )}
+              {mode === 'DEPLOY_STRUCTURE' && deployingStructure && (
+                <>
+                  <Package className="w-5 h-5 text-purple-400" />
+                  <span>Đặt {UNIT_DEFINITIONS[deployingStructure]?.name || deployingStructure}</span>
+                  <button
+                    onClick={() => setStructureOrientation((prev) => !prev)}
+                    className={clsx(
+                      'ml-2 px-2 py-1 rounded text-xs font-bold border transition-all',
+                      structureOrientation
+                        ? 'bg-amber-500 text-slate-900 border-amber-500'
+                        : 'border-slate-600 text-slate-400 hover:border-amber-500'
+                    )}
+                  >
+                    🔄 XOAY: {structureOrientation ? 'DỌC' : 'NGANG'}
+                  </button>
                 </>
               )}
               {mode === 'DEPLOY_STRUCTURE' && deployingStructure && (

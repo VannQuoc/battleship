@@ -182,6 +182,95 @@ export const SetupScreen = () => {
     toast('Đã reset tất cả!', { icon: '🔄' });
   };
 
+  const handleAutoDeploy = useCallback(() => {
+    if (!mapData || mapData.length === 0) {
+      toast.error('Bản đồ chưa sẵn sàng để tự động bố trí.');
+      return;
+    }
+
+    const mapSize = mapData.length;
+    const placed: ShipPlacement[] = [];
+    const occupied = new Set<string>();
+    const unitQueue: string[] = [];
+
+    Object.entries(availableUnits).forEach(([code, qty]) => {
+      for (let i = 0; i < qty; i++) {
+        unitQueue.push(code);
+      }
+    });
+
+    if (unitQueue.length === 0) {
+      toast.error('Không có đơn vị để triển khai.', { icon: '⚠️' });
+      return;
+    }
+
+    // Randomize order
+    for (let i = unitQueue.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [unitQueue[i], unitQueue[j]] = [unitQueue[j], unitQueue[i]];
+    }
+
+    const canPlace = (code: string, x: number, y: number, vertical: boolean) => {
+      const def = UNIT_DEFINITIONS[code];
+      if (!def) return false;
+      for (let i = 0; i < def.size; i++) {
+        const cx = vertical ? x + i : x;
+        const cy = vertical ? y : y + i;
+        if (cx < 0 || cy < 0 || cx >= mapSize || cy >= mapSize) return false;
+        if (mapData[cx]?.[cy] !== TERRAIN.WATER) return false;
+        if (occupied.has(`${cx},${cy}`)) return false;
+      }
+      return true;
+    };
+
+    const markCells = (code: string, x: number, y: number, vertical: boolean) => {
+      const def = UNIT_DEFINITIONS[code];
+      if (!def) return;
+      for (let i = 0; i < def.size; i++) {
+        const cx = vertical ? x + i : x;
+        const cy = vertical ? y : y + i;
+        occupied.add(`${cx},${cy}`);
+      }
+    };
+
+    const tryPlace = (code: string) => {
+      const maxTrials = mapSize * mapSize * 3;
+      for (let attempt = 0; attempt < maxTrials; attempt++) {
+        const x = Math.floor(Math.random() * mapSize);
+        const y = Math.floor(Math.random() * mapSize);
+        const vertical = Math.random() < 0.5;
+        if (canPlace(code, x, y, vertical)) {
+          markCells(code, x, y, vertical);
+          placed.push({ code, x, y, vertical });
+          return true;
+        }
+      }
+      return false;
+    };
+
+    const leftovers: string[] = [];
+    unitQueue.forEach((code) => {
+      const placedSuccessfully = tryPlace(code);
+      if (!placedSuccessfully && !leftovers.includes(code)) {
+        leftovers.push(code);
+      }
+    });
+
+    if (placed.length === 0) {
+      toast.error('Không có vị trí khả dụng để tự động triển khai hạm đội.', { icon: '⚠️' });
+      return;
+    }
+
+    setPlacedUnits(placed);
+    setSelectedCode(null);
+
+    if (leftovers.length > 0) {
+      toast(`Đã đặt phần lớn hạm đội. Còn thiếu: ${leftovers.join(', ')}`, { icon: '⚠️' });
+    } else {
+      toast('🤖 Tự động bố trí hoàn tất!', { duration: 2000 });
+    }
+  }, [availableUnits, mapData]);
+
   const handleConfirm = () => {
     if (!allDeployed) {
       toast.error(`Còn ${remainingCount} đơn vị chưa triển khai!`);
@@ -395,27 +484,36 @@ export const SetupScreen = () => {
             </span>
           </button>
 
-          <div className="flex gap-2">
+          <div className="space-y-2">
             <button
-              onClick={handleReset}
-              className="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg border border-red-500/50 text-red-400 hover:bg-red-500/10 transition-all"
+              onClick={handleAutoDeploy}
+              className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-lg border border-cyan-500/40 text-cyan-200 hover:bg-cyan-500/10 transition-all"
             >
-              <Trash2 className="w-4 h-4" />
-              RESET
+              <MapPin className="w-4 h-4 text-cyan-400" />
+              TỰ ĐỘNG TRIỂN KHAI
             </button>
-            <button
-              onClick={handleConfirm}
-              disabled={!allDeployed}
-              className={clsx(
-                'flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg font-bold transition-all',
-                allDeployed
-                  ? 'bg-gradient-to-r from-cyan-500 to-emerald-500 text-slate-900 hover:from-cyan-400 hover:to-emerald-400'
-                  : 'bg-slate-700 text-slate-500 cursor-not-allowed'
-              )}
-            >
-              <Play className="w-4 h-4" />
-              START
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={handleReset}
+                className="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg border border-red-500/50 text-red-400 hover:bg-red-500/10 transition-all"
+              >
+                <Trash2 className="w-4 h-4" />
+                RESET
+              </button>
+              <button
+                onClick={handleConfirm}
+                disabled={!allDeployed}
+                className={clsx(
+                  'flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-lg font-bold transition-all',
+                  allDeployed
+                    ? 'bg-gradient-to-r from-cyan-500 to-emerald-500 text-slate-900 hover:from-cyan-400 hover:to-emerald-400'
+                    : 'bg-slate-700 text-slate-500 cursor-not-allowed'
+                )}
+              >
+                <Play className="w-4 h-4" />
+                START
+              </button>
+            </div>
           </div>
 
           {/* Other Players Status */}
