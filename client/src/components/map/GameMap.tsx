@@ -5,7 +5,7 @@ import { TERRAIN, UNIT_DEFINITIONS } from '../../config/constants';
 import { UnitRenderer } from './UnitRenderer';
 import { clsx } from 'clsx';
 import { motion, AnimatePresence } from 'framer-motion';
-import type { DroneScanMarker, ShotMarker, Unit, TerrainType } from '../../types';
+import type { DroneScanMarker, EffectTrigger, ShotMarker, Unit, TerrainType } from '../../types';
 
 // ============================================================
 // TYPES
@@ -62,8 +62,8 @@ interface CellProps {
 }
 
 const Cell = memo(function Cell({
-  x,
-  y,
+  x: _x,
+  y: _y,
   terrain,
   isVisible,
   isValidMove,
@@ -93,6 +93,13 @@ const Cell = memo(function Cell({
 
   // Fog overlay
   const fogClass = !isVisible && !isDeployMode ? 'brightness-[0.15] grayscale' : '';
+  const shotOverlayClass = shotMarker
+    ? shotMarker.isCooldown
+      ? 'bg-red-500/50 border border-red-300 animate-pulse'
+      : shotMarker.result === 'MISS'
+      ? 'bg-yellow-500/30 border border-yellow-400'
+      : 'bg-red-500/30 border border-red-500'
+    : '';
 
   return (
     <div
@@ -113,6 +120,15 @@ const Cell = memo(function Cell({
       style={{ width: CELL_SIZE, height: CELL_SIZE }}
     >
       {content}
+      {shotMarker && (
+        <div
+          className={clsx(
+            'absolute inset-0 pointer-events-none rounded-sm',
+            shotOverlayClass
+          )}
+          title={`Bạn đã bắn: ${shotMarker.result}`}
+        />
+      )}
       {droneMarker && (
         <div
           className={clsx(
@@ -123,12 +139,6 @@ const Cell = memo(function Cell({
         >
           {droneMarker.icon}
         </div>
-      )}
-      {shotMarker && (
-        <div
-          className="absolute bottom-1 right-1 w-3 h-3 rounded-full bg-red-500/80 border border-red-300/70 pointer-events-none animate-pulse"
-          title={`Đã bắn: T${shotMarker.turn ?? '?'}`}
-        />
       )}
     </div>
   );
@@ -151,7 +161,12 @@ export const GameMap = ({
   droneMarkers,
 }: MapProps) => {
   const storeData = useGameStore();
-  const { mapData, opponent, lastEffect, playerId } = storeData;
+  const { mapData, opponent, lastEffect } = storeData;
+  type ShotEffect = EffectTrigger & { type: 'SHOT'; x: number; y: number };
+  const lastShotEffect: ShotEffect | null =
+    lastEffect?.type === 'SHOT' && typeof lastEffect.x === 'number' && typeof lastEffect.y === 'number'
+      ? (lastEffect as ShotEffect)
+      : null;
 
   // Use prop `me` if provided, otherwise use store
   const currentMe = me || storeData.me;
@@ -268,9 +283,8 @@ export const GameMap = ({
 
   // --- Unit Click Handler ---
   const handleUnitClick = useCallback(
-    (unit: Unit, isEnemy: boolean) => {
+    (unit: Unit) => {
       if (interactive && onCellClick) {
-        // Pass the unit's position to the cell click handler
         onCellClick(unit.x, unit.y);
       }
     },
@@ -349,7 +363,7 @@ export const GameMap = ({
                 gridColumn: `${unit.y + 1} / span ${cols}`,
                 gridRow: `${unit.x + 1} / span ${rows}`,
               }}
-              onClick={() => handleUnitClick(unit, false)}
+              onClick={() => handleUnitClick(unit)}
             >
               <UnitRenderer
                 unit={unit}
@@ -376,7 +390,7 @@ export const GameMap = ({
                 gridColumn: `${unit.y + 1} / span ${cols}`,
                 gridRow: `${unit.x + 1} / span ${rows}`,
               }}
-              onClick={() => handleUnitClick(unit, true)}
+              onClick={() => handleUnitClick(unit)}
             >
               <UnitRenderer
                 unit={unit}
@@ -427,6 +441,7 @@ export const GameMap = ({
               cells: ghostCells,
               type: def.type || 'SHIP',
               ownerId: '',
+              isImmobilized: false,
             };
 
             return (
@@ -450,23 +465,23 @@ export const GameMap = ({
 
       {/* ==================== EFFECT LAYER ==================== */}
       <AnimatePresence>
-        {lastEffect && lastEffect.type === 'SHOT' && (
+        {lastShotEffect && (
           <motion.div
-            key={`shot-${lastEffect.x}-${lastEffect.y}`}
+            key={`shot-${lastShotEffect.x}-${lastShotEffect.y}`}
             initial={{ scale: 0, opacity: 1 }}
             animate={{ scale: 2, opacity: 0 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.5 }}
             className="absolute pointer-events-none z-50"
             style={{
-              left: lastEffect.y * (CELL_SIZE + 1) + CELL_SIZE / 2,
-              top: lastEffect.x * (CELL_SIZE + 1) + CELL_SIZE / 2,
+              left: lastShotEffect.y * (CELL_SIZE + 1) + CELL_SIZE / 2,
+              top: lastShotEffect.x * (CELL_SIZE + 1) + CELL_SIZE / 2,
             }}
           >
             <div
               className={clsx(
                 'w-8 h-8 rounded-full -translate-x-1/2 -translate-y-1/2',
-                lastEffect.result === 'HIT' || lastEffect.result === 'SUNK'
+                lastShotEffect.result === 'HIT' || lastShotEffect.result === 'SUNK'
                   ? 'bg-red-500'
                   : 'bg-blue-500'
               )}

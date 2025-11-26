@@ -44,7 +44,7 @@ interface GameStore {
 
   // Effects State
   lastEffect: EffectTrigger | null;
-  recentShots: ShotMarker[];
+  shotMarkers: ShotMarker[];
   droneMarkers: DroneScanMarker[];
 
   // Winner State
@@ -52,7 +52,7 @@ interface GameStore {
   winReason: string | null;
 
   // Actions
-  connect: (url: string) => void;
+  connect: (url?: string) => void;
   disconnect: () => void;
   createRoom: (name: string, roomId: string, config?: Partial<GameConfig>) => void;
   joinRoom: (name: string, roomId: string) => void;
@@ -88,7 +88,7 @@ const initialState = {
   players: {} as Record<string, PublicPlayer>,
   logs: [],
   lastEffect: null,
-  recentShots: [],
+  shotMarkers: [],
   droneMarkers: [],
   winner: null,
   winReason: null,
@@ -106,7 +106,7 @@ export const useGameStore = create<GameStore>((set, get) => {
   // ==========================================================
   // CONNECTION
   // ==========================================================
-  connect: (url: string) => {
+  connect: (url?: string) => {
     const existingSocket = get().socket;
     
     // If socket exists and is connecting or connected, don't create new one
@@ -116,8 +116,9 @@ export const useGameStore = create<GameStore>((set, get) => {
       existingSocket.disconnect();
     }
 
-    console.log('[CLIENT] Connecting to:', url);
-    const socket = io(url, {
+    const endpoint = url || import.meta.env.VITE_SERVER_URL || 'http://localhost:3000';
+    console.log('[CLIENT] Connecting to:', endpoint);
+    const socket = io(endpoint, {
       transports: ['websocket', 'polling'],
       reconnectionAttempts: 5,
     });
@@ -230,14 +231,30 @@ export const useGameStore = create<GameStore>((set, get) => {
       logs: LogEntry[];
       config?: GameConfig;
     }) => {
-      const shotLogs = state.logs
-        .filter((log) => typeof log.x === 'number' && typeof log.y === 'number')
-        .slice(-10)
-        .map((log) => ({
-          x: log.x as number,
-          y: log.y as number,
+      const playerSocketId = get().playerId || state.me?.id;
+      const shotMap = new Map<string, ShotMarker>();
+
+      state.logs.forEach((log) => {
+        if (!playerSocketId || log.attacker !== playerSocketId) return;
+        if (typeof log.x !== 'number' || typeof log.y !== 'number') return;
+
+        const key = `${log.x},${log.y}`;
+        const marker: ShotMarker = {
+          x: log.x,
+          y: log.y,
           turn: log.turn ?? 0,
-        }));
+          result: log.result || 'MISS',
+          isCooldown:
+            typeof log.result === 'string' &&
+            (log.result.includes('COOLDOWN') || log.result === 'CELL_ON_COOLDOWN'),
+        };
+
+        const existing = shotMap.get(key);
+        if (!existing || (marker.turn ?? 0) >= (existing.turn ?? 0)) {
+          shotMap.set(key, marker);
+        }
+      });
+
       set({
         status: state.status,
         mapData: state.mapData,
@@ -247,12 +264,12 @@ export const useGameStore = create<GameStore>((set, get) => {
         opponent: state.opponent,
         players: state.players || {},
         logs: state.logs,
-        recentShots: shotLogs,
+        shotMarkers: Array.from(shotMap.values()),
         config: state.config || get().config,
       });
     });
 
-    socket.on('game_started', (data: { turnQueue: string[] }) => {
+    socket.on('game_started', () => {
       set({ status: 'BATTLE' });
       toast('⚔️ CHIẾN ĐẤU BẮT ĐẦU!', {
         duration: 3000,

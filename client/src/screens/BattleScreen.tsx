@@ -26,11 +26,8 @@ import {
   Clock,
   Heart,
   ShoppingCart,
-  ChevronRight,
-  Users,
   Map as MapIcon,
   Shield,
-  Trash2,
 } from 'lucide-react';
 import type { Unit, ItemUseParams, InventoryObject } from '../types';
 
@@ -70,7 +67,6 @@ export const BattleScreen = () => {
   const {
     me,
     opponent,
-    turn,
     playerId,
     moveUnit,
     fireShot,
@@ -79,8 +75,7 @@ export const BattleScreen = () => {
     buyItem,
     mapData,
     logs,
-    config,
-    recentShots,
+    shotMarkers,
     droneMarkers,
   } = useGameStore();
 
@@ -217,22 +212,6 @@ export const BattleScreen = () => {
 
     return moves;
   }, [mode, engineBoostUnitId, me?.fleet, mapData]);
-
-  // --- Drone preview line ---
-  const dronePreviewCells = useMemo(() => {
-    if (!selectedItem || selectedItem.itemId !== 'DRONE' || !mapData) return [];
-    const cells: string[] = [];
-    const size = mapData.length;
-    
-    for (let i = 0; i < size; i++) {
-      if (droneAxis === 'row') {
-        cells.push(`${droneIndex},${i}`);
-      } else {
-        cells.push(`${i},${droneIndex}`);
-      }
-    }
-    return cells;
-  }, [selectedItem, droneAxis, droneIndex, mapData]);
 
   // --- Handlers ---
   const handleMapClick = useCallback(
@@ -446,23 +425,6 @@ export const BattleScreen = () => {
         return;
       }
 
-      // BLACK_HAT_SELECT - select enemy structure
-      if (mode === 'BLACK_HAT_SELECT') {
-        const enemyStruct = visibleOpponentFleet.find((u) =>
-          !u.isSunk && u.type === 'STRUCTURE' && (
-            (u.x === x && u.y === y) ||
-            u.cells?.some((c) => c.x === x && c.y === y)
-          )
-        );
-        if (enemyStruct) {
-          handleItemUseWithParams('BLACK_HAT', { targetId: enemyStruct.id });
-          setMode('SELECT');
-        } else {
-          toast.error('Chọn một công trình địch!');
-        }
-        return;
-      }
-
       // ITEM mode for cell-target items (DECOY, SUICIDE_SQUAD, NUKE)
       if (mode === 'ITEM' && selectedItem) {
         if (selectedItem.requiresTarget === 'cell') {
@@ -473,7 +435,7 @@ export const BattleScreen = () => {
         return;
       }
     },
-    [isMyTurn, mode, selectedUnitId, validMoves, me?.fleet, selectedItem, selectedUnit, mapData, visibleOpponentFleet, engineBoostUnitId, engineBoostMoves]
+    [isMyTurn, mode, selectedUnitId, validMoves, me?.fleet, selectedItem, selectedUnit, mapData, visibleOpponentFleet, engineBoostUnitId, engineBoostMoves, blackHatCarrier]
   );
 
   const handleItemUseWithParams = (itemId: string, params: ItemUseParams) => {
@@ -573,10 +535,6 @@ export const BattleScreen = () => {
         });
         return;
 
-      case 'JAMMER':
-        handleItemUseWithParams('JAMMER', {});
-        return;
-
       default:
         toast.error('Vật phẩm không xác định!');
     }
@@ -621,16 +579,6 @@ export const BattleScreen = () => {
   }, []);
 
   // Get structures in inventory that can be deployed
-  const deployableStructures = useMemo(() => {
-    const structures: string[] = [];
-    Object.entries(inventory).forEach(([itemId, qty]) => {
-      if (qty > 0 && UNIT_DEFINITIONS[itemId]?.type === 'STRUCTURE') {
-        structures.push(itemId);
-      }
-    });
-    return structures;
-  }, [inventory]);
-
   const handleDeployStructure = (structureCode: string) => {
     setDeployingStructure(structureCode);
     setMode('DEPLOY_STRUCTURE');
@@ -647,7 +595,7 @@ export const BattleScreen = () => {
   };
 
   // Format log entry
-  const formatLog = (log: any, index: number) => {
+  const formatLog = (log: any) => {
     const isMyAction = log.attacker === playerId || log.playerId === playerId;
     
     if (log.action === 'ITEM') {
@@ -859,7 +807,7 @@ export const BattleScreen = () => {
             validMoves={mode === 'ENGINE_BOOST_SELECT_DEST' ? engineBoostMoves : validMoves}
             selectedUnitId={selectedUnitId || engineBoostUnitId}
             dronePreview={selectedItem?.itemId === 'DRONE' ? { axis: droneAxis, index: droneIndex } : undefined}
-            shotMarkers={recentShots}
+            shotMarkers={shotMarkers}
             droneMarkers={droneMarkers}
           />
 
@@ -877,7 +825,7 @@ export const BattleScreen = () => {
 
           {/* Unit Action Panel */}
           <AnimatePresence>
-            {selectedUnit && mode === 'SELECT' && isMyTurn && (
+          {selectedUnit && isMyTurn && (
               <motion.div
                 initial={{ y: 100, opacity: 0 }}
                 animate={{ y: 0, opacity: 1 }}
@@ -1250,7 +1198,7 @@ export const BattleScreen = () => {
             </h3>
             <div className="space-y-1.5 font-mono text-xs flex flex-col-reverse">
               {logs.slice(-20).reverse().map((log, i) => {
-                const formatted = formatLog(log, i);
+                const formatted = formatLog(log);
                 return (
                   <div
                     key={i}

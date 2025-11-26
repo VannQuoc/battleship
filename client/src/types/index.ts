@@ -52,6 +52,8 @@ export interface ShotMarker {
   x: number;
   y: number;
   turn?: number;
+  result: string;
+  isCooldown?: boolean;
 }
 
 export interface DroneScanMarker {
@@ -175,7 +177,7 @@ export interface EffectTrigger {
   result?: string;
   itemId?: string;
   unitId?: string;
-  findings?: { type: string; x: number; y: number }[];
+  findings?: { type: string; x: number; y: number; name?: string }[];
   hits?: { unitId: string; status: string }[];
   destroyed?: string[];
   msg?: string;
@@ -203,11 +205,13 @@ export interface ShipPlacement {
 export interface ItemUseParams {
   targetId?: string;
   unitId?: string;
+  hackerId?: string;
   x?: number;
   y?: number;
   vertical?: boolean;
   axis?: 'row' | 'col';
   index?: number;
+  rotate?: boolean;
 }
 
 // ============================================================

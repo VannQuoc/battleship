@@ -21,7 +21,7 @@ import {
 import type { ShipPlacement, Unit } from '../types';
 
 export const SetupScreen = () => {
-  const { deployFleet, mapData, me, playerId, opponent, players } = useGameStore();
+  const { deployFleet, mapData, me, playerId, players } = useGameStore();
 
   // --- State ---
   const [selectedCode, setSelectedCode] = useState<string | null>(null);

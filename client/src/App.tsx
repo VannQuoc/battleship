@@ -1,5 +1,4 @@
 // client/src/App.tsx
-import { useEffect } from 'react';
 import { Toaster } from 'react-hot-toast';
 import { useGameStore } from './store/useGameStore';
 import { LobbyScreen } from './screens/LobbyScreen';

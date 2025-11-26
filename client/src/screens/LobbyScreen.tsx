@@ -10,7 +10,7 @@ import {
   getItemName,
 } from '../config/constants';
 import { clsx } from 'clsx';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import {
   Anchor,
   Radio,
@@ -19,14 +19,12 @@ import {
   DollarSign,
   Users,
   Map,
-  ChevronRight,
   AlertCircle,
   Check,
   Play,
   Crown,
   User,
   Clock,
-  X,
   Trash2,
   Settings,
   ArrowLeft,
@@ -76,7 +74,7 @@ export const LobbyScreen = () => {
   // --- Auto-connect on mount ---
   useEffect(() => {
     if (!isConnected) {
-      connect('http://localhost:3000');
+      connect();
     }
   }, [isConnected, connect]);
 
@@ -98,11 +96,6 @@ export const LobbyScreen = () => {
 
   // --- My data from players object ---
   const myData = playerId ? players[playerId] : null;
-
-  // --- Other players (opponents) ---
-  const otherPlayers = useMemo(() => {
-    return Object.values(players).filter(p => p.id !== playerId);
-  }, [players, playerId]);
 
   // --- Calculate discount for Engineer ---
   const discount = useMemo(() => {
