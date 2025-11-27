@@ -72,22 +72,31 @@ class GameRoom {
 
     // Bresenham Line of Sight
     checkLineOfSight(x0, y0, x1, y1) {
+        // Check if start and end are the same
+        if (x0 === x1 && y0 === y1) return true;
+        
         let dx = Math.abs(x1 - x0);
         let dy = Math.abs(y1 - y0);
         let sx = (x0 < x1) ? 1 : -1;
         let sy = (y0 < y1) ? 1 : -1;
         let err = dx - dy;
+        
+        let currentX = x0;
+        let currentY = y0;
 
         while (true) {
-            if (x0 === x1 && y0 === y1) break;
-            
-            if (this.mapData[x0] && this.mapData[x0][y0] === TERRAIN.ISLAND) {
-                return false;
+            // Check current position for island (skip start position)
+            if (!(currentX === x0 && currentY === y0)) {
+                if (this.mapData[currentX] && this.mapData[currentX][currentY] === TERRAIN.ISLAND) {
+                    return false;
+                }
             }
+            
+            if (currentX === x1 && currentY === y1) break;
 
             let e2 = 2 * err;
-            if (e2 > -dy) { err -= dy; x0 += sx; }
-            if (e2 < dx) { err += dx; y0 += sy; }
+            if (e2 > -dy) { err -= dy; currentX += sx; }
+            if (e2 < dx) { err += dx; currentY += sy; }
         }
         return true; 
     }
@@ -329,6 +338,7 @@ class GameRoom {
             }
         }
 
+        // Use Manhattan distance for movement (actual distance traveled)
         const dist = Math.abs(newX - unit.x) + Math.abs(newY - unit.y);
         if (dist > unit.moveRange) throw new Error('Out of range');
 
@@ -386,7 +396,14 @@ class GameRoom {
                 throw new Error('Out of bounds');
             }
             if (this.isOccupied(cx, cy, unit.id)) throw new Error('Teleport blocked');
-            if (this.mapData[cx][cy] === TERRAIN.ISLAND) throw new Error('Cannot teleport onto Island');
+            
+            const terrain = this.mapData[cx][cy];
+            if (terrain === TERRAIN.ISLAND) throw new Error('Cannot teleport onto Island');
+            if (terrain === TERRAIN.REEF) {
+                if (unit.definition.size >= 4 || unit.code === 'SS') {
+                    throw new Error('Cannot teleport onto Reef');
+                }
+            }
         }
         
         // Cập nhật vị trí và hướng mới
@@ -402,23 +419,25 @@ class GameRoom {
         let firingUnit = null;
 
         if (preferredUnitId) {
-            const u = attacker.fleet.find(u => u.id === preferredUnitId);
-            if (u && !u.isSunk && (u.type === 'SHIP' || u.type === 'STRUCTURE')) {
-                const dist = Math.abs(u.x - x) + Math.abs(u.y - y);
-                let maxRange = this.getUnitRange(u);
+            const unit = attacker.fleet.find(unit => unit.id === preferredUnitId);
+            if (unit && !unit.isSunk && (unit.type === 'SHIP' || unit.type === 'STRUCTURE')) {
+                // Use Manhattan distance for range check (actual movement distance)
+                const dist = Math.abs(unit.x - x) + Math.abs(unit.y - y);
+                const maxRange = this.getUnitRange(unit);
                 if (dist <= maxRange) {
-                    firingUnit = u;
+                    firingUnit = unit;
                 }
             }
         }
 
         if (!firingUnit) {
-            for (const u of attacker.fleet) {
-                if (u.isSunk || (u.type !== 'SHIP' && u.type !== 'STRUCTURE')) continue;
-                const dist = Math.abs(u.x - x) + Math.abs(u.y - y);
-                let maxRange = this.getUnitRange(u);
+            for (const unit of attacker.fleet) {
+                if (unit.isSunk || (unit.type !== 'SHIP' && unit.type !== 'STRUCTURE')) continue;
+                // Use Manhattan distance for range check (actual movement distance)
+                const dist = Math.abs(unit.x - x) + Math.abs(unit.y - y);
+                const maxRange = this.getUnitRange(unit);
                 if (dist <= maxRange) {
-                    firingUnit = u;
+                    firingUnit = unit;
                     break; 
                 }
             }
@@ -439,18 +458,23 @@ class GameRoom {
         let sunkShipsList = [];
         let damage = firingUnit.definition.damage || 1;
 
+        // Check all opponents (prevent friendly fire)
         for (const pid in this.players) {
-            if (pid === attackerId) continue;
+            if (pid === attackerId) continue; // Skip self
 
             const opponent = this.players[pid];
             for (const targetUnit of opponent.fleet) {
-                if (!targetUnit.isSunk && targetUnit.occupies(x, y)) {
+                if (targetUnit.isSunk) continue;
+                
+                // Check if shot hits this unit
+                if (targetUnit.occupies(x, y)) {
+                    // CL cannot attack ships
                     if (firingUnit.code === 'CL' && targetUnit.type === 'SHIP') {
                         finalResult = 'NO_EFFECT';
                         continue;
                     }
 
-                    // Truyền turnNumber để check cooldown (không bắn cùng ô trong 2 turn)
+                    // Apply damage with cooldown check
                     const status = targetUnit.takeDamage(damage, x, y, this.turnNumber || 0);
 
                     if (status === 'HIT' || status === 'CRITICAL' || status === 'SUNK') {
@@ -460,10 +484,12 @@ class GameRoom {
                             sunkShipsList.push(targetUnit.code);
                             attacker.points += 200;
                         }
-                    } else if (status === 'ALREADY_HIT_PART' || status === 'CELL_ON_COOLDOWN') {
-                        // Ô này đã bị bắn và chưa hết cooldown
+                    } else if (status === 'CELL_ON_COOLDOWN') {
+                        // Cell is on cooldown
                         if (finalResult === 'MISS') finalResult = 'CELL_COOLDOWN';
                     }
+                    // Only one unit can be hit at a position
+                    break;
                 }
             }
         }
@@ -488,10 +514,22 @@ class GameRoom {
         return { result: finalResult, sunk: sunkShipsList };
     }
 
-    getUnitRange(u) {
-        if (u.definition.range !== undefined && u.definition.range === -1) return 999;
-        if (u.definition.rangeFactor) return this.config.mapSize * u.definition.rangeFactor;
-        return u.vision + 2;
+    getUnitRange(unit) {
+        // Structures cannot shoot (except special cases)
+        if (unit.type === 'STRUCTURE') {
+            // Some structures might have range in future, but for now return 0
+            return 0;
+        }
+        
+        // Ships can shoot
+        if (unit.definition.range !== undefined && unit.definition.range === -1) {
+            return 999; // Infinite range (CV)
+        }
+        if (unit.definition.rangeFactor) {
+            return Math.floor(this.config.mapSize * unit.definition.rangeFactor);
+        }
+        // Default range: vision + 2
+        return unit.vision + 2;
     }
 
     checkWinCondition() {
@@ -499,7 +537,8 @@ class GameRoom {
         
         for (const playerId in this.players) {
             const player = this.players[playerId];
-            const remainingShips = player.fleet.filter(u => u.type === 'SHIP' && !u.isSunk);
+            // Only check ships - structures cannot attack, so player loses when all ships are sunk
+            const remainingShips = player.fleet.filter(unit => unit.type === 'SHIP' && !unit.isSunk);
             
             if (remainingShips.length > 0) {
                 alivePlayers.push(playerId);
@@ -529,7 +568,7 @@ class GameRoom {
 
     /**
      * Reveal ships near lighthouses when they perform actions (move, shoot, kamikaze)
-     * Only reveals ships that are active, not passive ones
+     * Only reveals ships that are active (performing the action), not all ships in range
      */
     checkLighthouseDetection(unitX, unitY, ownerId) {
         // Check all players' lighthouses
@@ -538,17 +577,22 @@ class GameRoom {
             const player = this.players[pid];
             player.fleet.forEach(lighthouse => {
                 if (lighthouse.isSunk || lighthouse.code !== 'LIGHTHOUSE') return;
+                
+                // Check if the action (at unitX, unitY) is within lighthouse vision
                 const dist = this.chebyshevDistance(lighthouse.x, lighthouse.y, unitX, unitY);
                 if (dist <= lighthouse.vision) {
-                    // Reveal enemy ships in lighthouse range
+                    // Reveal the enemy player's ships that are in lighthouse range
                     const enemyPlayer = this.players[ownerId];
                     if (enemyPlayer) {
                         enemyPlayer.fleet.forEach(ship => {
                             if (ship.isSunk || ship.type !== 'SHIP') return;
-                            // Check if ship is in lighthouse range
-                            const shipDist = this.chebyshevDistance(lighthouse.x, lighthouse.y, ship.x, ship.y);
-                            if (shipDist <= lighthouse.vision) {
-                                ship.revealedTurns = Math.max(ship.revealedTurns || 0, 3);
+                            // Check if any cell of ship is in lighthouse range
+                            for (const cell of ship.cells) {
+                                const shipDist = this.chebyshevDistance(lighthouse.x, lighthouse.y, cell.x, cell.y);
+                                if (shipDist <= lighthouse.vision) {
+                                    ship.revealedTurns = Math.max(ship.revealedTurns || 0, 3);
+                                    break; // Only need to reveal once
+                                }
                             }
                         });
                     }
@@ -565,8 +609,14 @@ class GameRoom {
                 if (unit.isSunk) return;
                 if (unit.type !== 'SHIP') return;
                 if (!unit.definition?.isStealth) return;
-                if (this.chebyshevDistance(unit.x, unit.y, x, y) <= range) {
-                    unit.revealedTurns = Math.max(unit.revealedTurns || 0, 3);
+                
+                // Check if any cell of unit is within radar range
+                for (const cell of unit.cells) {
+                    const dist = this.chebyshevDistance(cell.x, cell.y, x, y);
+                    if (dist <= range) {
+                        unit.revealedTurns = Math.max(unit.revealedTurns || 0, 3);
+                        break; // Only need to reveal once
+                    }
                 }
             });
         }
@@ -641,6 +691,13 @@ class GameRoom {
             if (terrain === TERRAIN.ISLAND) {
                 return { success: false, error: 'Cannot place on Island' };
             }
+            if (terrain === TERRAIN.REEF) {
+                // Structures can be placed on reef (unlike ships)
+                // But check if structure is too large
+                if (structDef.size >= 4) {
+                    return { success: false, error: 'Structure too large for Reef' };
+                }
+            }
             
             if (this.isOccupied(cx, cy)) {
                 return { success: false, error: 'Position occupied' };
@@ -692,7 +749,18 @@ class GameRoom {
     }
 
     nextTurn() {
-        this.turnIndex = (this.turnIndex + 1) % this.turnQueue.length;
+        // Skip to next valid player
+        let attempts = 0;
+        do {
+            this.turnIndex = (this.turnIndex + 1) % this.turnQueue.length;
+            attempts++;
+            if (attempts > this.turnQueue.length) {
+                // All players invalid, end game
+                this.status = 'ENDED';
+                return;
+            }
+        } while (!this.players[this.turnQueue[this.turnIndex]]);
+        
         this.turnNumber++; // Tăng số lượt (dùng cho cooldown)
         const currentPlayerId = this.turnQueue[this.turnIndex];
         const player = this.players[currentPlayerId];
@@ -722,7 +790,22 @@ class GameRoom {
             if (u.code === 'SUPPLY') {
                 const range = 1;
                 player.fleet.forEach(friend => {
-                    if (!friend.isSunk && Math.abs(friend.x - u.x) <= range && Math.abs(friend.y - u.y) <= range) {
+                    if (friend.isSunk) return;
+                    
+                    // Check if any cell of friend unit is within SUPPLY range
+                    let inRange = false;
+                    for (const supplyCell of u.cells) {
+                        for (const friendCell of friend.cells) {
+                            const dist = this.chebyshevDistance(supplyCell.x, supplyCell.y, friendCell.x, friendCell.y);
+                            if (dist <= range) {
+                                inRange = true;
+                                break;
+                            }
+                        }
+                        if (inRange) break;
+                    }
+                    
+                    if (inRange) {
                         friend.hp = Math.min(friend.maxHp, friend.hp + 5);
                         if (friend.hp > friend.maxHp * CONSTANTS.CRITICAL_THRESHOLD) friend.isImmobilized = false;
                     }
@@ -820,10 +903,10 @@ class GameRoom {
                 if (u.type === 'STRUCTURE') {
                     const structDef = u.definition || UNITS[u.code];
                     const isStealth = structDef?.isStealth !== undefined ? structDef.isStealth : false;
-                    const alwaysVisible = structDef?.alwaysVisible || u.alwaysVisible || false;
+                    const alwaysVisible = structDef?.alwaysVisible !== undefined ? structDef.alwaysVisible : (u.alwaysVisible || false);
                     
-                    // Always visible structures are always shown
-                    if (alwaysVisible || u.revealedTurns > 0) {
+                    // Always visible structures are always shown (regardless of stealth)
+                    if (alwaysVisible) {
                         return { 
                             id: u.id,
                             code: u.code, 
@@ -833,28 +916,50 @@ class GameRoom {
                             isSunk: false, 
                             hp: u.hp,
                             maxHp: u.maxHp,
-                            isRevealed: u.revealedTurns > 0,
+                            isRevealed: true,
                             cells: u.cells,
                             type: u.type
                         };
                     }
                     
-                    // Non-stealth structures: check vision
+                    // Revealed structures (by items/actions) are shown
+                    if (u.revealedTurns > 0) {
+                        return { 
+                            id: u.id,
+                            code: u.code, 
+                            x: u.x, 
+                            y: u.y, 
+                            vertical: u.vertical, 
+                            isSunk: false, 
+                            hp: u.hp,
+                            maxHp: u.maxHp,
+                            isRevealed: true,
+                            cells: u.cells,
+                            type: u.type
+                        };
+                    }
+                    
+                    // Non-stealth structures: check vision from any ship
                     if (!isStealth) {
                         for (const myShip of me.fleet) {
                             if (myShip.isSunk) continue;
-                            const dist = Math.max(Math.abs(myShip.x - u.x), Math.abs(myShip.y - u.y));
-                            if (dist <= myShip.vision + visionBonus) {
-                                return { 
-                                    id: u.id,
-                                    code: u.code, 
-                                    x: u.x, 
-                                    y: u.y, 
-                                    vertical: u.vertical, 
-                                    isSunk: false,
-                                    cells: u.cells,
-                                    type: u.type
-                                };
+                            // Check if any cell of structure is in vision range (Chebyshev distance for square vision)
+                            for (const structCell of u.cells) {
+                                const dist = this.chebyshevDistance(myShip.x, myShip.y, structCell.x, structCell.y);
+                                if (dist <= myShip.vision + visionBonus) {
+                                    return { 
+                                        id: u.id,
+                                        code: u.code, 
+                                        x: u.x, 
+                                        y: u.y, 
+                                        vertical: u.vertical, 
+                                        isSunk: false,
+                                        hp: u.hp,
+                                        maxHp: u.maxHp,
+                                        cells: u.cells,
+                                        type: u.type
+                                    };
+                                }
                             }
                         }
                     }
@@ -892,7 +997,8 @@ class GameRoom {
                         // Submarine chỉ bị phát hiện bởi Destroyer có Sonar
                         for (const dd of myDestroyers) {
                             if (!dd.definition?.hasSonar) continue;
-                            const dist = Math.max(Math.abs(dd.x - u.x), Math.abs(dd.y - u.y));
+                            // Use Chebyshev distance for vision (square vision range)
+                            const dist = this.chebyshevDistance(dd.x, dd.y, u.x, u.y);
                             if (dist <= dd.vision + visionBonus) {
                                 return { 
                                     id: u.id,
@@ -910,7 +1016,8 @@ class GameRoom {
                         // Các ship stealth khác có thể bị phát hiện bởi bất kỳ ship nào trong tầm nhìn
                         for (const myShip of me.fleet) {
                             if (myShip.isSunk) continue;
-                            const dist = Math.max(Math.abs(myShip.x - u.x), Math.abs(myShip.y - u.y));
+                            // Use Chebyshev distance for vision (square vision range)
+                            const dist = this.chebyshevDistance(myShip.x, myShip.y, u.x, u.y);
                             if (dist <= myShip.vision + visionBonus) {
                                 return { 
                                     id: u.id,
@@ -929,7 +1036,8 @@ class GameRoom {
                     // Non-stealth units: có thể bị phát hiện bởi bất kỳ ship nào trong tầm nhìn
                     for (const myShip of me.fleet) {
                         if (myShip.isSunk) continue;
-                        const dist = Math.max(Math.abs(myShip.x - u.x), Math.abs(myShip.y - u.y));
+                        // Use Chebyshev distance for vision (square vision range)
+                        const dist = this.chebyshevDistance(myShip.x, myShip.y, u.x, u.y);
                         if (dist <= myShip.vision + visionBonus) {
                             return { 
                                 id: u.id,

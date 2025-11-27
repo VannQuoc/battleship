@@ -63,7 +63,7 @@ module.exports = {
                     if (!unit || unit.isSunk) throw new Error('Invalid Unit');
                     if (unit.type === 'STRUCTURE') throw new Error('Cannot boost structures');
                     
-                    // Kiểm tra khoảng cách tối đa 5 ô (Manhattan distance)
+                    // Kiểm tra khoảng cách tối đa 5 ô (Manhattan distance - actual movement)
                     const dist = Math.abs(params.x - unit.x) + Math.abs(params.y - unit.y);
                     if (dist > 5) throw new Error('Boost range exceeded (max 5)');
 
@@ -206,17 +206,25 @@ module.exports = {
                     const hits = [];
 
                     opponent.fleet.forEach(u => {
-                        if (!u.isSunk) {
-                            // Sử dụng Chebyshev distance (max of |dx|, |dy|) để check va chạm hình vuông (3x3)
-                            const dist = Math.max(Math.abs(u.x - targetX), Math.abs(u.y - targetY)); 
+                        if (u.isSunk) return;
+                        
+                        // Check if any cell of target unit is within explosion radius
+                        let hit = false;
+                        for (const cell of u.cells) {
+                            const dist = Math.max(Math.abs(cell.x - targetX), Math.abs(cell.y - targetY));
                             if (dist <= radius) {
-                                // Gây dmg 3 (ví dụ)
-                                const status = u.takeDamage(3);
-                                hits.push({ unitId: u.id, status });
-                                
-                                // Check lighthouse detection when kamikaze
-                                gameRoom.checkLighthouseDetection(u.x, u.y, opponent.id);
+                                hit = true;
+                                break;
                             }
+                        }
+                        
+                        if (hit) {
+                            // Gây dmg 3 (ví dụ)
+                            const status = u.takeDamage(3);
+                            hits.push({ unitId: u.id, status });
+                            
+                            // Check lighthouse detection when kamikaze
+                            gameRoom.checkLighthouseDetection(u.x, u.y, opponent.id);
                         }
                     });
                     
@@ -226,28 +234,41 @@ module.exports = {
 
             case 'NUKE': // Nổ Hạt Nhân (Khả năng 15x15, cần SILO)
                 {
-                    const activeSilo = player.fleet.find(u => u.code === 'SILO' && !u.isSunk && u.chargingTurns <= 0);
+                    const activeSilo = player.fleet.find(unit => unit.code === 'SILO' && !unit.isSunk && unit.chargingTurns <= 0);
            
-                    if (!activeSilo) throw new Error('Cần Bệ Phóng Hạt Nhân đã nạp đạn (5 lượt)');
+                    if (!activeSilo) throw new Error('Cần Bệ Phóng Hạt Nhân đã nạp đạn');
                     
                     const radius = CONSTANTS.NUKE_RADIUS; // 7 = 15x15 area (7 ô mỗi bên từ tâm)
-                    const center = { x: params.x, y: params.y };
+                    const centerX = params.x;
+                    const centerY = params.y;
                     const destroyed = [];
 
                     // Nuke gây sát thương cho CẢ 2 bên (friendly fire)
-                    [player, opponent].forEach(p => {
-                        p.fleet.forEach(u => {
-                            if(u.isSunk) return;
+                    // Check all players' fleets
+                    for (const pid in gameRoom.players) {
+                        const fleetOwner = gameRoom.players[pid];
+                        fleetOwner.fleet.forEach(unit => {
+                            if (unit.isSunk) return;
                             
-                            // Kiểm tra va chạm hình vuông (Chebyshev distance)
-                            if (Math.abs(u.x - center.x) <= radius && Math.abs(u.y - center.y) <= radius) {
-                                u.takeDamage(999); // Sát thương chí mạng
-                                destroyed.push(u.id);
+                            // Check if any cell of unit is within explosion radius (Chebyshev distance)
+                            let hit = false;
+                            for (const cell of unit.cells) {
+                                const dist = Math.max(Math.abs(cell.x - centerX), Math.abs(cell.y - centerY));
+                                if (dist <= radius) {
+                                    hit = true;
+                                    break;
+                                }
+                            }
+                            
+                            if (hit) {
+                                unit.takeDamage(999); // Sát thương chí mạng
+                                destroyed.push(unit.id);
                             }
                         });
-                    });
-                    result = { type: 'NUKE_EXPLOSION', x: params.x, y: params.y, destroyed };
-                    activeSilo.chargingTurns = CONSTANTS.SILO_CHARGE_TURNS || 5;
+                    }
+                    
+                    result = { type: 'NUKE_EXPLOSION', x: centerX, y: centerY, destroyed };
+                    activeSilo.chargingTurns = CONSTANTS.SILO_CHARGE_TURNS || 1;
                 }
                 break;
 
@@ -269,24 +290,63 @@ module.exports = {
                     // Điều kiện: Unit phải đang ở ngưỡng Critical (ví dụ: máu thấp hơn 50%)
                     if (!unit || unit.hp > unit.maxHp * CONSTANTS.CRITICAL_THRESHOLD) throw new Error('Condition not met');
                     
-                    const unitX = unit.x;
-                    const unitY = unit.y;
+                    // Use center of unit (average of all cells) for explosion center
+                    let centerX = 0, centerY = 0;
+                    if (unit.cells && unit.cells.length > 0) {
+                        centerX = Math.round(unit.cells.reduce((sum, c) => sum + c.x, 0) / unit.cells.length);
+                        centerY = Math.round(unit.cells.reduce((sum, c) => sum + c.y, 0) / unit.cells.length);
+                    } else {
+                        centerX = unit.x;
+                        centerY = unit.y;
+                    }
                     
                     unit.takeDamage(999); // Tự hủy ngay lập tức
                     
-                    // Gây dmg 3x3 xung quanh vị trí nổ
+                    // Gây dmg 3x3 xung quanh vị trí nổ (check all cells of target units)
                     const radius = 1; 
                     const hits = [];
                     
                     if (opponent && opponent.fleet) {
                         opponent.fleet.forEach(u => {
-                            if (!u.isSunk && Math.abs(u.x - unitX) <= radius && Math.abs(u.y - unitY) <= radius) {
+                            if (u.isSunk) return;
+                            
+                            // Check if any cell of target unit is within explosion radius
+                            let hit = false;
+                            for (const cell of u.cells) {
+                                const dist = Math.max(Math.abs(cell.x - centerX), Math.abs(cell.y - centerY));
+                                if (dist <= radius) {
+                                    hit = true;
+                                    break;
+                                }
+                            }
+                            
+                            if (hit) {
                                 const status = u.takeDamage(CONSTANTS.SUICIDE_DAMAGE || 5);
                                 hits.push({ unitId: u.id, status });
                             }
                         });
                     }
-                    result = { type: 'SUICIDE_EXPLOSION', x: unitX, y: unitY, hits };
+                    
+                    // Also check own fleet (friendly fire)
+                    player.fleet.forEach(u => {
+                        if (u.id === unit.id || u.isSunk) return;
+                        
+                        let hit = false;
+                        for (const cell of u.cells) {
+                            const dist = Math.max(Math.abs(cell.x - centerX), Math.abs(cell.y - centerY));
+                            if (dist <= radius) {
+                                hit = true;
+                                break;
+                            }
+                        }
+                        
+                        if (hit) {
+                            const status = u.takeDamage(CONSTANTS.SUICIDE_DAMAGE || 5);
+                            hits.push({ unitId: u.id, status });
+                        }
+                    });
+                    
+                    result = { type: 'SUICIDE_EXPLOSION', x: centerX, y: centerY, hits };
                 }
                 break;
 

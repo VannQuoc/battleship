@@ -78,11 +78,12 @@ class Unit {
   takeDamage(dmg = 1, atX = -1, atY = -1, currentTurn = 0) {
     if (this.isSunk) return 'ALREADY_SUNK';
 
+    // If specific coordinates provided, check cell cooldown
     if (atX !== -1 && atY !== -1) {
       const cell = this.cells.find(c => c.x === atX && c.y === atY);
       
-        if (cell) {
-        if (cell.hit) {
+      if (cell) {
+        if (cell.hit && cell.hitTurn >= 0) {
           // Cell đã bị hit - check cooldown
           const cooldownTurns = CONSTANTS.SHOT_COOLDOWN_TURNS || 2;
           const turnsSinceHit = currentTurn - cell.hitTurn;
@@ -90,11 +91,17 @@ class Unit {
             // Chưa đủ cooldown - không gây damage
             return 'CELL_ON_COOLDOWN';
           }
-          // Đã đủ cooldown - có thể bắn lại
+          // Đã đủ cooldown - có thể bắn lại, reset hit state
+          cell.hit = false;
+          cell.hitTurn = -1;
         }
         // Đánh dấu bộ phận này đã hỏng
         cell.hit = true;
         cell.hitTurn = currentTurn;
+      } else {
+        // Cell not found - this shouldn't happen if coordinates are correct
+        // But still apply damage (fallback)
+        console.warn(`[Unit.takeDamage] Cell not found at (${atX}, ${atY}) for unit ${this.id}`);
       }
     }
 
