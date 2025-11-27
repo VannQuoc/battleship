@@ -36,6 +36,7 @@ interface GameStore {
   // Game State
   status: GameStatus;
   turn: string | null;
+  turnNumber?: number;
   mapData: TerrainType[][];
   me: Player | null;
   opponent: Opponent | null;
@@ -82,6 +83,7 @@ const initialState = {
   config: null,
   status: 'IDLE' as GameStatus,
   turn: null,
+  turnNumber: undefined,
   mapData: [] as TerrainType[][],
   me: null,
   opponent: null,
@@ -223,6 +225,7 @@ export const useGameStore = create<GameStore>((set, get) => {
       status: GameStatus;
       mapData: TerrainType[][];
       turn: string;
+      turnNumber?: number;
       hostId: string;
       me: Player;
       opponent: Opponent;
@@ -233,32 +236,80 @@ export const useGameStore = create<GameStore>((set, get) => {
     }) => {
       const playerSocketId = get().playerId || state.me?.id;
       const shotMap = new Map<string, ShotMarker>();
+      const cooldownTurns = state.config?.constants?.SHOT_COOLDOWN_TURNS || 2;
 
+      // First, collect all shot logs from this player
+      const shotLogs: Array<{ x: number; y: number; turn: number; result: string }> = [];
       state.logs.forEach((log) => {
         if (!playerSocketId || log.attacker !== playerSocketId) return;
         if (typeof log.x !== 'number' || typeof log.y !== 'number') return;
+        shotLogs.push({
+          x: log.x,
+          y: log.y,
+          turn: log.turn ?? log.turn ?? 0,
+          result: log.result || 'MISS',
+        });
+      });
 
+      // Get current turn from state or calculate from logs
+      const currentTurn = state.turnNumber ?? (shotLogs.length > 0 
+        ? Math.max(...shotLogs.map(l => l.turn)) 
+        : state.logs.length);
+
+      // Process shot logs - keep most recent for each cell
+      shotLogs.forEach((log) => {
         const key = `${log.x},${log.y}`;
+        const turnsSinceShot = currentTurn - log.turn;
+        const isCooldown = log.result === 'HIT' && turnsSinceShot < cooldownTurns;
+        
         const marker: ShotMarker = {
           x: log.x,
           y: log.y,
-          turn: log.turn ?? 0,
-          result: log.result || 'MISS',
-          isCooldown:
-            typeof log.result === 'string' &&
-            (log.result.includes('COOLDOWN') || log.result === 'CELL_ON_COOLDOWN'),
+          turn: log.turn,
+          result: log.result,
+          isCooldown: isCooldown,
         };
 
         const existing = shotMap.get(key);
-        if (!existing || (marker.turn ?? 0) >= (existing.turn ?? 0)) {
+        // Keep the most recent shot for each cell
+        if (!existing || marker.turn >= (existing.turn ?? 0)) {
           shotMap.set(key, marker);
         }
       });
+
+      // Also get hit cells from opponent units (for HIT shots - shows all hit cells)
+      if (state.opponent?.fleet) {
+        state.opponent.fleet.forEach((unit: any) => {
+          if (!unit.cells) return;
+          unit.cells.forEach((cell: any) => {
+            if (cell.hit && typeof cell.x === 'number' && typeof cell.y === 'number') {
+              const key = `${cell.x},${cell.y}`;
+              const existing = shotMap.get(key);
+              // Only add if not already in map (logs take precedence for turn info)
+              if (!existing) {
+                // If cell is hit but not in logs, it's a HIT from a previous turn
+                shotMap.set(key, {
+                  x: cell.x,
+                  y: cell.y,
+                  turn: currentTurn - 1, // Assume previous turn
+                  result: 'HIT',
+                  isCooldown: false, // Old hit, no cooldown
+                });
+              } else if (existing.result === 'HIT') {
+                // Update cooldown status for existing HIT markers
+                const turnsSinceShot = currentTurn - (existing.turn ?? 0);
+                existing.isCooldown = turnsSinceShot < cooldownTurns;
+              }
+            }
+          });
+        });
+      }
 
       set({
         status: state.status,
         mapData: state.mapData,
         turn: state.turn,
+        turnNumber: state.turnNumber,
         hostId: state.hostId,
         me: state.me,
         opponent: state.opponent,

@@ -1,15 +1,16 @@
 // client/src/config/constants.ts
-// Synced with server/src/config/definitions.js
+// Now loads from API via ConfigContext
+// Fallback values are provided for initial render
 
 import type { UnitDefinition, ItemDefinition, CommanderDefinition } from '../types';
 
 // ============================================================
-// GAME CONSTANTS (Match Server)
+// FALLBACK CONSTANTS (used before config loads)
 // ============================================================
-export const CONSTANTS = {
+export const CONSTANTS_FALLBACK = {
   DEFAULT_MAP_SIZE: 30,
   DEFAULT_POINTS: 3000,
-  MAX_SLOTS: 10, // Số slot inventory (mỗi loại item = 1 slot)
+  MAX_SLOTS: 10,
   MAX_PLAYERS: 10,
   MIN_PLAYERS: 2,
   CRITICAL_THRESHOLD: 0.5,
@@ -21,10 +22,17 @@ export const CONSTANTS = {
   NUCLEAR_PLANT_SPAWN_TURNS: 10,
   MAP_SIZE_BASE: 20,
   MAP_SIZE_PER_PLAYER: 5,
+  RADAR_RANGE: 2,
+  WHITE_HAT_RANGE: 2,
+  WHITE_HAT_TURNS: 3,
+  JAMMER_DISRUPT_RANGE: 2,
 } as const;
 
+// Export fallback as default for backward compatibility
+export const CONSTANTS = CONSTANTS_FALLBACK;
+
 // ============================================================
-// TERRAIN TYPES
+// TERRAIN TYPES (static)
 // ============================================================
 export const TERRAIN = {
   WATER: 0,
@@ -35,10 +43,9 @@ export const TERRAIN = {
 } as const;
 
 // ============================================================
-// UNIT DEFINITIONS (Ships + Structures)
+// FALLBACK UNIT DEFINITIONS
 // ============================================================
-export const UNIT_DEFINITIONS: Record<string, UnitDefinition> = {
-  // --- SHIPS ---
+export const UNIT_DEFINITIONS_FALLBACK: Record<string, UnitDefinition> = {
   CV: {
     code: 'CV',
     name: 'Carrier',
@@ -102,8 +109,6 @@ export const UNIT_DEFINITIONS: Record<string, UnitDefinition> = {
     isStealth: true,
     desc: 'Tàu ngầm - Tàng hình, không đi qua Reef',
   },
-
-  // --- STRUCTURES ---
   LIGHTHOUSE: {
     code: 'LIGHTHOUSE',
     name: 'Hải Đăng',
@@ -163,11 +168,13 @@ export const UNIT_DEFINITIONS: Record<string, UnitDefinition> = {
   },
 };
 
+// Export fallback as default for backward compatibility
+export const UNIT_DEFINITIONS = UNIT_DEFINITIONS_FALLBACK;
+
 // ============================================================
-// ITEM DEFINITIONS
+// FALLBACK ITEM DEFINITIONS
 // ============================================================
-export const ITEMS: Record<string, ItemDefinition> = {
-  // --- PASSIVE ITEMS ---
+export const ITEMS_FALLBACK: Record<string, ItemDefinition> = {
   ANTI_AIR: {
     id: 'ANTI_AIR',
     name: 'Tên Lửa Phòng Không',
@@ -184,7 +191,6 @@ export const ITEMS: Record<string, ItemDefinition> = {
     counter: 'MISSILE',
     desc: 'Chặn skill dạng tên lửa (Future)',
   },
-  // --- ACTIVE ITEMS ---
   WHITE_HAT: {
     id: 'WHITE_HAT',
     name: 'Hacker Mũ Trắng',
@@ -264,8 +270,6 @@ export const ITEMS: Record<string, ItemDefinition> = {
     reqSilo: true,
     desc: 'BK 7 (~15x15) - Hủy diệt tất cả (cần SILO)',
   },
-
-  // --- SKILL UNLOCK ---
   SELF_DESTRUCT: {
     id: 'SELF_DESTRUCT',
     name: 'Tự Hủy (Skill)',
@@ -275,8 +279,11 @@ export const ITEMS: Record<string, ItemDefinition> = {
   },
 };
 
+// Export fallback as default for backward compatibility
+export const ITEMS = ITEMS_FALLBACK;
+
 // ============================================================
-// COMMANDER DEFINITIONS
+// COMMANDER DEFINITIONS (static)
 // ============================================================
 export const COMMANDERS: CommanderDefinition[] = [
   {
@@ -303,51 +310,70 @@ export const COMMANDERS: CommanderDefinition[] = [
 ];
 
 // ============================================================
-// HELPER FUNCTIONS
+// HOOKS TO GET CONFIG FROM CONTEXT (for dynamic values)
+// ============================================================
+export { useConfig } from '../contexts/ConfigContext';
+
+export function useConstants() {
+  const { config } = useConfig();
+  return config?.constants || CONSTANTS_FALLBACK;
+}
+
+export function useUnitDefinitions() {
+  const { config } = useConfig();
+  return config?.units || UNIT_DEFINITIONS_FALLBACK;
+}
+
+export function useItemDefinitions() {
+  const { config } = useConfig();
+  return config?.items || ITEMS_FALLBACK;
+}
+
+// ============================================================
+// HELPER FUNCTIONS (use fallback values)
 // ============================================================
 export function getUnitDefinition(code: string): UnitDefinition | undefined {
-  return UNIT_DEFINITIONS[code];
+  return UNIT_DEFINITIONS_FALLBACK[code];
 }
 
 export function getItemDefinition(id: string): ItemDefinition | undefined {
-  return ITEMS[id];
+  return ITEMS_FALLBACK[id];
 }
 
 export function isStructure(code: string): boolean {
-  return UNIT_DEFINITIONS[code]?.type === 'STRUCTURE';
+  return UNIT_DEFINITIONS_FALLBACK[code]?.type === 'STRUCTURE';
 }
 
 export function isShip(code: string): boolean {
-  return UNIT_DEFINITIONS[code]?.type === 'SHIP';
+  return UNIT_DEFINITIONS_FALLBACK[code]?.type === 'SHIP';
 }
 
 export function getStructures(): UnitDefinition[] {
-  return Object.values(UNIT_DEFINITIONS).filter((u) => u.type === 'STRUCTURE');
+  return Object.values(UNIT_DEFINITIONS_FALLBACK).filter((u) => u.type === 'STRUCTURE');
 }
 
 export function getShips(): UnitDefinition[] {
-  return Object.values(UNIT_DEFINITIONS).filter((u) => u.type === 'SHIP');
+  return Object.values(UNIT_DEFINITIONS_FALLBACK).filter((u) => u.type === 'SHIP');
 }
 
 export function getActiveItems(): ItemDefinition[] {
-  return Object.values(ITEMS).filter((i) => i.type === 'ACTIVE');
+  return Object.values(ITEMS_FALLBACK).filter((i) => i.type === 'ACTIVE');
 }
 
 export function getPassiveItems(): ItemDefinition[] {
-  return Object.values(ITEMS).filter((i) => i.type === 'PASSIVE');
+  return Object.values(ITEMS_FALLBACK).filter((i) => i.type === 'PASSIVE');
 }
 
 export function getPurchasableItems(): ItemDefinition[] {
-  return Object.values(ITEMS).filter((i) => i.type !== 'SKILL');
+  return Object.values(ITEMS_FALLBACK).filter((i) => i.type !== 'SKILL');
 }
 
 export function calculatePrice(code: string, discount: number = 0): number {
-  const def = UNIT_DEFINITIONS[code] || ITEMS[code];
+  const def = UNIT_DEFINITIONS_FALLBACK[code] || ITEMS_FALLBACK[code];
   if (!def) return 0;
   return Math.floor(def.cost * (1 - discount));
 }
 
-// Get item name by ID
 export function getItemName(id: string): string {
-  return ITEMS[id]?.name || UNIT_DEFINITIONS[id]?.name || id;
+  return ITEMS_FALLBACK[id]?.name || UNIT_DEFINITIONS_FALLBACK[id]?.name || id;
 }

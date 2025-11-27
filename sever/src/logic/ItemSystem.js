@@ -247,7 +247,7 @@ module.exports = {
                         });
                     });
                     result = { type: 'NUKE_EXPLOSION', x: params.x, y: params.y, destroyed };
-                    activeSilo.chargingTurns = 5;
+                    activeSilo.chargingTurns = CONSTANTS.SILO_CHARGE_TURNS || 5;
                 }
                 break;
 

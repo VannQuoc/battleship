@@ -1,17 +1,21 @@
 // server/src/config/definitions.js
+// This file now uses configLoader to read from shared/gameConfig.json
+// Provides backward-compatible exports
 
-module.exports = {
-  CONSTANTS: {
+const configLoader = require('./configLoader');
+
+// Static fallback definitions (defined first for reference)
+const STATIC_DEFINITIONS = {
+  CONSTANTS_STATIC: {
     DEFAULT_MAP_SIZE: 30,
     DEFAULT_POINTS: 3000,
-    MAX_SLOTS: 10, // Số slot inventory (mỗi loại item = 1 slot dù có bao nhiêu)
-    MAX_PLAYERS: 10, // Tối đa 10 người chơi
-    MIN_PLAYERS: 2, // Tối thiểu 2 người
+    MAX_SLOTS: 10,
+    MAX_PLAYERS: 10,
+    MIN_PLAYERS: 2,
     CRITICAL_THRESHOLD: 0.5,
     SUICIDE_DAMAGE: 5,
     NUKE_RADIUS: 7,
     ENGINEER_DISCOUNT: 0.2,
-    // Map size scaling: base + (players * multiplier)
     MAP_SIZE_BASE: 20,
     MAP_SIZE_PER_PLAYER: 5,
     RADAR_RANGE: 2,
@@ -20,16 +24,15 @@ module.exports = {
     JAMMER_DISRUPT_RANGE: 2,
   },
 
-  // V2.0: ĐỊNH NGHĨA ĐỊA HÌNH
-  TERRAIN: {
+  TERRAIN_STATIC: {
     WATER: 0,
-    ISLAND: 1, // Chặn tất cả
-    REEF: 2,   // Chặn tàu to (Size >= 4) và SS
-    STORM: 3,  // Chặn máy bay (Future feature)
-    FOG: 4     // Giảm vision
+    ISLAND: 1,
+    REEF: 2,
+    STORM: 3,
+    FOG: 4
   },
 
-  UNITS: {
+  UNITS_STATIC: {
     // --- SHIPS ---
     CV: { 
       code: 'CV', name: 'Carrier', size: 5, hp: 10, vision: 4, move: 2, cost: 0, 
@@ -73,7 +76,7 @@ module.exports = {
     NUCLEAR_PLANT: { code: 'NUCLEAR_PLANT', name: 'Nhà Máy HN', size: 4, hp: 8, vision: 2, cost: 1500, type: 'STRUCTURE', passive: 'GEN_NUKE', alwaysVisible: true }
   },
 
-  ITEMS: {
+  ITEMS_STATIC: {
     // --- PASSIVE ---
     ANTI_AIR: { id: 'ANTI_AIR', name: 'Tên lửa PK', type: 'PASSIVE', cost: 200, counter: 'AIR' },
     FLARES: { id: 'FLARES', name: 'Bẫy Nhiệt', type: 'PASSIVE', cost: 150, counter: 'MISSILE' },
@@ -95,3 +98,74 @@ module.exports = {
     SELF_DESTRUCT: { id: 'SELF_DESTRUCT', name: 'Cảm Tử (Skill)', type: 'SKILL', cost: 0 }
   }
 };
+
+// Create exported objects (will be updated dynamically)
+let CONSTANTS_EXPORT = {};
+let UNITS_EXPORT = {};
+let ITEMS_EXPORT = {};
+let COMMANDERS_EXPORT = {};
+const TERRAIN_EXPORT = configLoader.getTerrain();
+
+function updateExports() {
+  const loadedConfig = configLoader.loadConfig();
+  CONSTANTS_EXPORT = loadedConfig.constants || loadedConfig.CONSTANTS || STATIC_DEFINITIONS.CONSTANTS_STATIC;
+  UNITS_EXPORT = loadedConfig.units || loadedConfig.UNITS || STATIC_DEFINITIONS.UNITS_STATIC;
+  ITEMS_EXPORT = loadedConfig.items || loadedConfig.ITEMS || STATIC_DEFINITIONS.ITEMS_STATIC;
+  COMMANDERS_EXPORT = loadedConfig.commanders || loadedConfig.COMMANDERS || {};
+}
+
+// Reload config (call this after updates)
+function reloadConfig() {
+  configLoader.clearCache();
+  updateExports();
+  // Update direct properties for destructured values
+  definitions.CONSTANTS = CONSTANTS_EXPORT;
+  definitions.UNITS = UNITS_EXPORT;
+  definitions.ITEMS = ITEMS_EXPORT;
+  return configLoader.loadConfig();
+}
+
+// Initialize exports
+updateExports();
+
+// Export object with properties for destructuring compatibility
+const definitions = {
+  get CONSTANTS() {
+    return CONSTANTS_EXPORT;
+  },
+
+  get TERRAIN() {
+    return TERRAIN_EXPORT;
+  },
+
+  get UNITS() {
+    return UNITS_EXPORT;
+  },
+
+  get ITEMS() {
+    return ITEMS_EXPORT;
+  },
+
+  get COMMANDERS() {
+    return COMMANDERS_EXPORT;
+  },
+
+  // Helper to reload config
+  reload: reloadConfig,
+
+  // Static fallbacks (for reference)
+  CONSTANTS_STATIC: STATIC_DEFINITIONS.CONSTANTS_STATIC,
+  UNITS_STATIC: STATIC_DEFINITIONS.UNITS_STATIC,
+  ITEMS_STATIC: STATIC_DEFINITIONS.ITEMS_STATIC,
+  TERRAIN_STATIC: STATIC_DEFINITIONS.TERRAIN_STATIC
+};
+
+// For destructuring compatibility, also export as direct properties
+// These will be updated on reload
+definitions.CONSTANTS = CONSTANTS_EXPORT;
+definitions.TERRAIN = TERRAIN_EXPORT;
+definitions.UNITS = UNITS_EXPORT;
+definitions.ITEMS = ITEMS_EXPORT;
+definitions.COMMANDERS = COMMANDERS_EXPORT;
+
+module.exports = definitions;

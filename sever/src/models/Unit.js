@@ -9,7 +9,7 @@ class Unit {
     
     // [FIX 2A]: KHỞI TẠO CHARGE CHO SILO
     if (this.code === 'SILO') {
-        this.chargingTurns = 5; 
+        this.chargingTurns = CONSTANTS.SILO_CHARGE_TURNS || 5; 
     } else {
         this.chargingTurns = 0;
     }
@@ -36,9 +36,13 @@ class Unit {
     this.isSunk = false;
     this.isImmobilized = false;
     
-    // Ships are ALWAYS stealth by default
-    // Only structures use alwaysVisible
-    this.isStealth = this.type === 'SHIP' ? true : (definition.isStealth || false);
+    // Read isStealth from definition (default: ships = true, structures = false)
+    if (definition.isStealth !== undefined) {
+        this.isStealth = definition.isStealth;
+    } else {
+        // Default: ships are stealth, structures are not
+        this.isStealth = this.type === 'SHIP';
+    }
     this.alwaysVisible = this.type === 'STRUCTURE' ? (definition.alwaysVisible || false) : false;
 
     this.hasRadar = false;
@@ -77,12 +81,13 @@ class Unit {
     if (atX !== -1 && atY !== -1) {
       const cell = this.cells.find(c => c.x === atX && c.y === atY);
       
-      if (cell) {
+        if (cell) {
         if (cell.hit) {
           // Cell đã bị hit - check cooldown
+          const cooldownTurns = CONSTANTS.SHOT_COOLDOWN_TURNS || 2;
           const turnsSinceHit = currentTurn - cell.hitTurn;
-          if (turnsSinceHit < 2) {
-            // Chưa đủ 2 turn - không gây damage
+          if (turnsSinceHit < cooldownTurns) {
+            // Chưa đủ cooldown - không gây damage
             return 'CELL_ON_COOLDOWN';
           }
           // Đã đủ cooldown - có thể bắn lại

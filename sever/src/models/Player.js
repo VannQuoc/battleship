@@ -33,8 +33,16 @@ class Player {
 
   setCommander(cmdId) {
     this.commander = cmdId;
-    if (cmdId === 'ENGINEER') {
-        this.buildingDiscount = CONSTANTS.ENGINEER_DISCOUNT || 0.2;
+    const { COMMANDERS } = require('../config/definitions');
+    const commander = COMMANDERS[cmdId];
+    if (commander && commander.enabled !== false) {
+        if (cmdId === 'ENGINEER' && commander.passiveDiscount) {
+            this.buildingDiscount = commander.passiveDiscount;
+        } else {
+            this.buildingDiscount = 0;
+        }
+    } else {
+        this.buildingDiscount = 0;
     }
   }
 
@@ -70,6 +78,9 @@ class Player {
 
     if (itemId === 'NUKE') return false;
     if (!itemDef) return false;
+    
+    // Check if unit/item is enabled
+    if (itemDef.enabled === false) return false;
     
     // Tính giá (Engineer giảm giá Structure)
     let finalCost = itemDef.cost;

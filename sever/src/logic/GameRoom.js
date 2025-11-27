@@ -198,6 +198,11 @@ class GameRoom {
             if (!def) {
                 return { success: false, error: `Unknown unit: ${s.code}` };
             }
+            
+            // Check if unit is enabled
+            if (def.enabled === false) {
+                return { success: false, error: `Unit ${s.code} is disabled` };
+            }
 
             // Validate Structure ownership
             if (def.type === 'STRUCTURE') {
@@ -248,13 +253,17 @@ class GameRoom {
                 def, s.x, s.y, s.vertical, playerId
             );
             
-            // Commander Passives
-            if (player.commander === 'ADMIRAL' && unit.type === 'SHIP') {
-                unit.maxHp = Math.floor(unit.maxHp * 1.2);
-                unit.hp = unit.maxHp;
-            }
-            if (player.commander === 'SPY' && unit.code === 'SS') {
-                unit.moveRange += 2;
+            // Commander Passives (from config)
+            const { COMMANDERS } = require('../config/definitions');
+            const commander = COMMANDERS[player.commander];
+            if (commander && commander.enabled !== false) {
+                if (player.commander === 'ADMIRAL' && unit.type === 'SHIP' && commander.passiveHpBonus) {
+                    unit.maxHp = Math.floor(unit.maxHp * (1 + commander.passiveHpBonus));
+                    unit.hp = unit.maxHp;
+                }
+                if (player.commander === 'SPY' && unit.code === 'SS' && commander.passiveSubMoveBonus) {
+                    unit.moveRange += commander.passiveSubMoveBonus;
+                }
             }
             
             tempFleet.push(unit);
@@ -614,6 +623,11 @@ class GameRoom {
             return { success: false, error: 'Invalid structure' };
         }
         
+        // Check if structure is enabled
+        if (structDef.enabled === false) {
+            return { success: false, error: 'Structure is disabled' };
+        }
+        
         // Validate position
         for (let i = 0; i < structDef.size; i++) {
             const cx = vertical ? x + i : x;
@@ -715,7 +729,7 @@ class GameRoom {
                 });
             }
 
-            if (u.code === 'NUCLEAR_PLANT' && u.turnCounter >= 10) {
+            if (u.code === 'NUCLEAR_PLANT' && u.turnCounter >= (CONSTANTS.NUCLEAR_PLANT_SPAWN_TURNS || 10)) {
                 const added = player.addItem('NUKE');
                 if (added) {
                     u.turnCounter = 0;
@@ -723,11 +737,11 @@ class GameRoom {
                 }
             }
             
-            if (u.code === 'AIRFIELD' && u.turnCounter >= 3) {
-                const added = player.addItem('DRONE');
+            if (u.code === 'AIRFIELD' && u.turnCounter >= (CONSTANTS.AIRFIELD_SPAWN_TURNS || 3)) {
+                const added = player.addItem('PLANE');
                 if (added) {
                     u.turnCounter = 0;
-                    this.logs.push({ action: 'PASSIVE_GENERATE', playerId: player.id, item: 'DRONE' });
+                    this.logs.push({ action: 'PASSIVE_GENERATE', playerId: player.id, item: 'PLANE' });
                 }
             }
         });
@@ -802,9 +816,14 @@ class GameRoom {
                     };
                 }
 
-                // STRUCTURES: có cái hiện, có cái ẩn (dựa vào alwaysVisible)
+                // STRUCTURES: có cái hiện, có cái ẩn (dựa vào alwaysVisible và isStealth)
                 if (u.type === 'STRUCTURE') {
-                    if (u.alwaysVisible || u.revealedTurns > 0) {
+                    const structDef = u.definition || UNITS[u.code];
+                    const isStealth = structDef?.isStealth !== undefined ? structDef.isStealth : false;
+                    const alwaysVisible = structDef?.alwaysVisible || u.alwaysVisible || false;
+                    
+                    // Always visible structures are always shown
+                    if (alwaysVisible || u.revealedTurns > 0) {
                         return { 
                             id: u.id,
                             code: u.code, 
@@ -819,23 +838,27 @@ class GameRoom {
                             type: u.type
                         };
                     }
-                    // Hidden structure - check vision
-                    for (const myShip of me.fleet) {
-                        if (myShip.isSunk) continue;
-                        const dist = Math.max(Math.abs(myShip.x - u.x), Math.abs(myShip.y - u.y));
-                        if (dist <= myShip.vision + visionBonus) {
-                            return { 
-                                id: u.id,
-                                code: u.code, 
-                                x: u.x, 
-                                y: u.y, 
-                                vertical: u.vertical, 
-                                isSunk: false,
-                                cells: u.cells,
-                                type: u.type
-                            };
+                    
+                    // Non-stealth structures: check vision
+                    if (!isStealth) {
+                        for (const myShip of me.fleet) {
+                            if (myShip.isSunk) continue;
+                            const dist = Math.max(Math.abs(myShip.x - u.x), Math.abs(myShip.y - u.y));
+                            if (dist <= myShip.vision + visionBonus) {
+                                return { 
+                                    id: u.id,
+                                    code: u.code, 
+                                    x: u.x, 
+                                    y: u.y, 
+                                    vertical: u.vertical, 
+                                    isSunk: false,
+                                    cells: u.cells,
+                                    type: u.type
+                                };
+                            }
                         }
                     }
+                    // Stealth structures: only revealed by revealedTurns or special detection
                     return null;
                 }
 
@@ -859,20 +882,66 @@ class GameRoom {
                     };
                 }
 
-                // Chỉ Destroyer với Sonar có thể phát hiện ships
-                for (const dd of myDestroyers) {
-                    const dist = Math.max(Math.abs(dd.x - u.x), Math.abs(dd.y - u.y));
-                    if (dist <= dd.vision + visionBonus) {
-                        return { 
-                            id: u.id,
-                            code: u.code, 
-                            x: u.x, 
-                            y: u.y, 
-                            vertical: u.vertical, 
-                            isSunk: false,
-                            cells: u.cells,
-                            type: u.type
-                        };
+                // Check stealth from definition
+                const unitDef = u.definition || UNITS[u.code];
+                const isStealth = unitDef?.isStealth !== undefined ? unitDef.isStealth : (u.type === 'SHIP');
+                
+                if (isStealth) {
+                    // Stealth units: chỉ bị phát hiện bởi Destroyer có Sonar (nếu là SS) hoặc bất kỳ ship nào (nếu không phải SS)
+                    if (u.code === 'SS') {
+                        // Submarine chỉ bị phát hiện bởi Destroyer có Sonar
+                        for (const dd of myDestroyers) {
+                            if (!dd.definition?.hasSonar) continue;
+                            const dist = Math.max(Math.abs(dd.x - u.x), Math.abs(dd.y - u.y));
+                            if (dist <= dd.vision + visionBonus) {
+                                return { 
+                                    id: u.id,
+                                    code: u.code, 
+                                    x: u.x, 
+                                    y: u.y, 
+                                    vertical: u.vertical, 
+                                    isSunk: false,
+                                    cells: u.cells,
+                                    type: u.type
+                                };
+                            }
+                        }
+                    } else {
+                        // Các ship stealth khác có thể bị phát hiện bởi bất kỳ ship nào trong tầm nhìn
+                        for (const myShip of me.fleet) {
+                            if (myShip.isSunk) continue;
+                            const dist = Math.max(Math.abs(myShip.x - u.x), Math.abs(myShip.y - u.y));
+                            if (dist <= myShip.vision + visionBonus) {
+                                return { 
+                                    id: u.id,
+                                    code: u.code, 
+                                    x: u.x, 
+                                    y: u.y, 
+                                    vertical: u.vertical, 
+                                    isSunk: false,
+                                    cells: u.cells,
+                                    type: u.type
+                                };
+                            }
+                        }
+                    }
+                } else {
+                    // Non-stealth units: có thể bị phát hiện bởi bất kỳ ship nào trong tầm nhìn
+                    for (const myShip of me.fleet) {
+                        if (myShip.isSunk) continue;
+                        const dist = Math.max(Math.abs(myShip.x - u.x), Math.abs(myShip.y - u.y));
+                        if (dist <= myShip.vision + visionBonus) {
+                            return { 
+                                id: u.id,
+                                code: u.code, 
+                                x: u.x, 
+                                y: u.y, 
+                                vertical: u.vertical, 
+                                isSunk: false,
+                                cells: u.cells,
+                                type: u.type
+                            };
+                        }
                     }
                 }
                 
@@ -894,6 +963,7 @@ class GameRoom {
             status: this.status,
             mapData: this.mapData,
             turn: this.turnQueue[this.turnIndex],
+            turnNumber: this.turnNumber, // Add turn number for cooldown calculation
             hostId: this.hostId,
             me: { 
                 id: me.id,

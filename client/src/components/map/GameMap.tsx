@@ -122,13 +122,25 @@ const Cell = memo(function Cell({
     >
       {content}
       {shotMarker && (
-        <div
-          className={clsx(
-            'absolute inset-0 pointer-events-none rounded-sm',
-            shotOverlayClass
+        <>
+          <div
+            className={clsx(
+              'absolute inset-0 pointer-events-none rounded-sm',
+              shotOverlayClass
+            )}
+            title={`Bạn đã bắn: ${shotMarker.result === 'MISS' ? 'Trượt' : shotMarker.result === 'HIT' ? 'Trúng' : shotMarker.result}`}
+          />
+          {shotMarker.result === 'MISS' && (
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              <span className="text-yellow-400 text-xs font-bold">○</span>
+            </div>
           )}
-          title={`Bạn đã bắn: ${shotMarker.result}`}
-        />
+          {shotMarker.result === 'HIT' && !shotMarker.isCooldown && (
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              <span className="text-red-500 text-sm font-bold">✖</span>
+            </div>
+          )}
+        </>
       )}
       {droneMarker && (
         <div

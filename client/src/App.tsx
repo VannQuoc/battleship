@@ -4,11 +4,26 @@ import { useGameStore } from './store/useGameStore';
 import { LobbyScreen } from './screens/LobbyScreen';
 import { SetupScreen } from './screens/SetupScreen';
 import { BattleScreen } from './screens/BattleScreen';
+import { AdminScreen } from './screens/AdminScreen';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Anchor, Trophy, RefreshCw } from 'lucide-react';
+import { useEffect, useState } from 'react';
 
 function App() {
   const { status, winner, winReason, reset, playerId } = useGameStore();
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  useEffect(() => {
+    // Check if we're on /admin route
+    if (window.location.pathname === '/admin') {
+      setIsAdmin(true);
+    }
+  }, []);
+
+  // Show admin screen if on /admin route
+  if (isAdmin) {
+    return <AdminScreen />;
+  }
 
   // --- Game Ended Screen ---
   if (status === 'ENDED') {
