@@ -425,6 +425,26 @@ export const BattleScreen = () => {
         return;
       }
 
+      // DRONE_SELECT mode - click on row/column number
+      if (mode === 'DRONE_SELECT' && selectedItem?.itemId === 'DRONE') {
+        // x = -1 means column label clicked, y = column index
+        // y = -1 means row label clicked, x = row index
+        if (x === -1 && y >= 0) {
+          // Column label clicked
+          handleItemUseWithParams('DRONE', { axis: 'col', index: y });
+          setSelectedItem(null);
+          setMode('SELECT');
+        } else if (y === -1 && x >= 0) {
+          // Row label clicked
+          handleItemUseWithParams('DRONE', { axis: 'row', index: x });
+          setSelectedItem(null);
+          setMode('SELECT');
+        } else {
+          toast.error('Click vào số hàng (bên trái) hoặc số cột (bên trên) để quét!');
+        }
+        return;
+      }
+
       // ITEM mode for cell-target items (DECOY, SUICIDE_SQUAD, NUKE)
       if (mode === 'ITEM' && selectedItem) {
         if (selectedItem.requiresTarget === 'cell') {
@@ -512,7 +532,8 @@ export const BattleScreen = () => {
 
       case 'DRONE':
         setSelectedItem({ itemId, requiresTarget: 'row_col' });
-        setMode('ITEM');
+        setMode('DRONE_SELECT');
+        toast('Click vào số hàng hoặc cột trên bản đồ để quét!', { icon: '📡' });
         return;
 
       case 'DECOY':
@@ -792,6 +813,7 @@ export const BattleScreen = () => {
           <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGRlZnM+PHBhdHRlcm4gaWQ9ImdyaWQiIHdpZHRoPSI2MCIgaGVpZ2h0PSI2MCIgcGF0dGVyblVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+PHBhdGggZD0iTSAxMCAwIEwgMCAwIDAgMTAiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzMzNDE1NSIgc3Ryb2tlLXdpZHRoPSIwLjUiLz48L3BhdHRlcm4+PC9kZWZzPjxyZWN0IHdpZHRoPSIxMDAlIiBoZWlnaHQ9IjEwMCUiIGZpbGw9InVybCgjZ3JpZCkiLz48L3N2Zz4=')] opacity-20" />
 
           <GameMap
+            droneSelectMode={mode === 'DRONE_SELECT' && selectedItem?.itemId === 'DRONE'}
             interactive={isMyTurn}
             onCellClick={handleMapClick}
             onCellHover={(x, y) => setHoverCell(x >= 0 ? {x, y} : null)}

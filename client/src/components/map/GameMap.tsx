@@ -35,6 +35,7 @@ interface MapProps {
   dronePreview?: DronePreview;
   shotMarkers?: ShotMarker[];
   droneMarkers?: DroneScanMarker[];
+  droneSelectMode?: boolean; // When true, show clickable row/column labels
 }
 
 // ============================================================
@@ -159,6 +160,7 @@ export const GameMap = ({
   dronePreview,
   shotMarkers,
   droneMarkers,
+  droneSelectMode = false,
 }: MapProps) => {
   const storeData = useGameStore();
   const { mapData, opponent, lastEffect } = storeData;
@@ -299,6 +301,43 @@ export const GameMap = ({
         if (onCellHover) onCellHover(-1, -1);
       }}
     >
+      {/* ==================== ROW/COLUMN LABELS (for drone selection) ==================== */}
+      {droneSelectMode && (
+        <>
+          {/* Row labels (left side) */}
+          <div
+            className="absolute left-0 top-1 flex flex-col pointer-events-auto"
+            style={{ width: '24px', marginLeft: '-28px' }}
+          >
+            {mapData.map((_, rowIndex) => (
+              <button
+                key={`row-${rowIndex}`}
+                onClick={() => onCellClick && onCellClick(rowIndex, -1)} // Use -1 for y to indicate row click
+                className="w-6 h-7 text-[10px] font-mono font-bold text-cyan-400 hover:text-cyan-300 hover:bg-cyan-500/20 rounded transition-all cursor-pointer flex items-center justify-center"
+                title={`Quét hàng ${rowIndex}`}
+              >
+                {rowIndex}
+              </button>
+            ))}
+          </div>
+          {/* Column labels (top side) */}
+          <div
+            className="absolute top-0 left-1 flex pointer-events-auto"
+            style={{ height: '24px', marginTop: '-28px' }}
+          >
+            {mapData[0]?.map((_, colIndex) => (
+              <button
+                key={`col-${colIndex}`}
+                onClick={() => onCellClick && onCellClick(-1, colIndex)} // Use -1 for x to indicate column click
+                className="w-7 h-6 text-[10px] font-mono font-bold text-cyan-400 hover:text-cyan-300 hover:bg-cyan-500/20 rounded transition-all cursor-pointer flex items-center justify-center"
+                title={`Quét cột ${colIndex}`}
+              >
+                {colIndex}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
       {/* ==================== GRID ==================== */}
       <div
         className="grid gap-[1px] bg-cyan-500/5"

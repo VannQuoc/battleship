@@ -13,6 +13,7 @@ class Player {
     // Mỗi loại item chỉ chiếm 1 slot dù có bao nhiêu
     this.inventory = {};   // { 'NUKE': 2, 'DRONE': 3, 'SILO': 1, ... }
     this.structures = [];  // Danh sách structure ID đã mua
+    this.purchasePrices = {}; // Track purchase prices for refund: { itemId: { price: number, quantity: number } }
     
     // Kinh tế
     this.points = CONSTANTS.DEFAULT_POINTS || 3000;
@@ -26,7 +27,7 @@ class Player {
     this.activeEffects = {
         jammer: 0,
         admiralVision: 0,
-        whiteHat: null,
+        whiteHat: [], // Array of white hat deployments
     };
   }
 
@@ -98,6 +99,22 @@ class Player {
       this.inventory[itemId] = 1;
     }
     
+    // Track purchase price for refund (weighted average if multiple purchases)
+    if (this.purchasePrices[itemId]) {
+      const existing = this.purchasePrices[itemId];
+      const totalQuantity = existing.quantity + 1;
+      const totalValue = (existing.price * existing.quantity) + finalCost;
+      this.purchasePrices[itemId] = {
+        price: Math.floor(totalValue / totalQuantity),
+        quantity: totalQuantity
+      };
+    } else {
+      this.purchasePrices[itemId] = {
+        price: finalCost,
+        quantity: 1
+      };
+    }
+    
     // Track structure riêng
     if (itemDef.type === 'STRUCTURE') {
         this.structures.push(itemId);
@@ -150,7 +167,7 @@ class Player {
     return this.inventory[itemId] || 0;
   }
 
-  // Bán/Hoàn trả item (refund 80% giá gốc)
+  // Bán/Hoàn trả item (refund 80% giá đã mua, tính cả discount nếu có)
   sellItem(itemId) {
     if (!this.inventory[itemId] || this.inventory[itemId] <= 0) {
       return { success: false, error: 'Item not found' };
@@ -163,8 +180,17 @@ class Player {
 
     if (!itemDef) return { success: false, error: 'Invalid item' };
 
-    // Hoàn trả 80% giá gốc
-    const refundAmount = Math.floor(itemDef.cost * 0.8);
+    // Hoàn trả 80% giá đã mua (có tính discount nếu đã mua với discount)
+    let purchasePrice = itemDef.cost;
+    if (this.purchasePrices[itemId] && this.purchasePrices[itemId].quantity > 0) {
+      purchasePrice = this.purchasePrices[itemId].price;
+      // Update purchase price tracking
+      this.purchasePrices[itemId].quantity--;
+      if (this.purchasePrices[itemId].quantity <= 0) {
+        delete this.purchasePrices[itemId];
+      }
+    }
+    const refundAmount = Math.floor(purchasePrice * 0.8);
     this.points += refundAmount;
 
     // Giảm số lượng

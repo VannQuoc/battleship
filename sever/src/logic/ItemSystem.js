@@ -133,9 +133,12 @@ module.exports = {
                     if (!targetStruct || targetStruct.type !== 'STRUCTURE') throw new Error('Invalid Structure');
                     if (!targetOwner || targetOwner.id === player.id) throw new Error('Cannot hack own structure');
 
-                    const whiteHat = targetOwner.activeEffects.whiteHat;
-                    if (whiteHat && gameRoom.chebyshevDistance(targetStruct.x, targetStruct.y, whiteHat.x, whiteHat.y) <= whiteHat.range) {
-                        return { type: 'BLOCKED_WHITE_HAT', msg: 'White Hat chặn Hacker!' };
+                    // Check all white hats (array)
+                    const whiteHats = targetOwner.activeEffects.whiteHat || [];
+                    for (const whiteHat of whiteHats) {
+                        if (whiteHat && gameRoom.chebyshevDistance(targetStruct.x, targetStruct.y, whiteHat.x, whiteHat.y) <= whiteHat.range) {
+                            return { type: 'BLOCKED_WHITE_HAT', msg: 'White Hat chặn Hacker!' };
+                        }
                     }
 
                     targetOwner.fleet = targetOwner.fleet.filter(u => u.id !== targetStruct.id);
@@ -152,12 +155,18 @@ module.exports = {
                     const x = Number(params.x);
                     const y = Number(params.y);
                     if (Number.isNaN(x) || Number.isNaN(y)) throw new Error('Invalid coordinates');
-                    player.activeEffects.whiteHat = {
+                    if (gameRoom.isOccupied(x, y)) throw new Error('Position occupied');
+                    
+                    // Add to array (allow multiple white hats)
+                    if (!Array.isArray(player.activeEffects.whiteHat)) {
+                        player.activeEffects.whiteHat = [];
+                    }
+                    player.activeEffects.whiteHat.push({
                         x,
                         y,
                         range: CONSTANTS.WHITE_HAT_RANGE,
                         turnsLeft: CONSTANTS.WHITE_HAT_TURNS,
-                    };
+                    });
                     result = { type: 'WHITE_HAT_DEPLOYED', x, y, duration: CONSTANTS.WHITE_HAT_TURNS };
                 }
                 break;
@@ -204,6 +213,9 @@ module.exports = {
                                 // Gây dmg 3 (ví dụ)
                                 const status = u.takeDamage(3);
                                 hits.push({ unitId: u.id, status });
+                                
+                                // Check lighthouse detection when kamikaze
+                                gameRoom.checkLighthouseDetection(u.x, u.y, opponent.id);
                             }
                         }
                     });
@@ -218,7 +230,7 @@ module.exports = {
            
                     if (!activeSilo) throw new Error('Cần Bệ Phóng Hạt Nhân đã nạp đạn (5 lượt)');
                     
-                    const radius = Math.floor(CONSTANTS.NUKE_RADIUS / 2); // Giả định CONSTANTS.NUKE_RADIUS = 15
+                    const radius = CONSTANTS.NUKE_RADIUS; // 7 = 15x15 area (7 ô mỗi bên từ tâm)
                     const center = { x: params.x, y: params.y };
                     const destroyed = [];
 

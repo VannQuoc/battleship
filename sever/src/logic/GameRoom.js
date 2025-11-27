@@ -347,6 +347,10 @@ class GameRoom {
         const oldY = unit.y;
         unit.updateCells(newX, newY, unit.vertical);
         this.logs.push({ action: 'MOVE', playerId, unitId, from: {x: oldX, y: oldY}, to: {x: newX, y: newY} });
+        
+        // Check lighthouse detection when ship moves
+        this.checkLighthouseDetection(newX, newY, playerId);
+        
         this.nextTurn();
         return { success: true };
     }
@@ -464,6 +468,9 @@ class GameRoom {
             sunk: sunkShipsList 
         });
 
+        // Check lighthouse detection when ship shoots
+        this.checkLighthouseDetection(firingUnit.x, firingUnit.y, attackerId);
+
         if (this.checkWinCondition()) {
             return { result: finalResult, sunk: sunkShipsList, winner: this.winner, gameEnded: true };
         }
@@ -509,6 +516,36 @@ class GameRoom {
 
     chebyshevDistance(x1, y1, x2, y2) {
         return Math.max(Math.abs(x1 - x2), Math.abs(y1 - y2));
+    }
+
+    /**
+     * Reveal ships near lighthouses when they perform actions (move, shoot, kamikaze)
+     * Only reveals ships that are active, not passive ones
+     */
+    checkLighthouseDetection(unitX, unitY, ownerId) {
+        // Check all players' lighthouses
+        for (const pid in this.players) {
+            if (pid === ownerId) continue; // Don't reveal own ships to self
+            const player = this.players[pid];
+            player.fleet.forEach(lighthouse => {
+                if (lighthouse.isSunk || lighthouse.code !== 'LIGHTHOUSE') return;
+                const dist = this.chebyshevDistance(lighthouse.x, lighthouse.y, unitX, unitY);
+                if (dist <= lighthouse.vision) {
+                    // Reveal enemy ships in lighthouse range
+                    const enemyPlayer = this.players[ownerId];
+                    if (enemyPlayer) {
+                        enemyPlayer.fleet.forEach(ship => {
+                            if (ship.isSunk || ship.type !== 'SHIP') return;
+                            // Check if ship is in lighthouse range
+                            const shipDist = this.chebyshevDistance(lighthouse.x, lighthouse.y, ship.x, ship.y);
+                            if (shipDist <= lighthouse.vision) {
+                                ship.revealedTurns = Math.max(ship.revealedTurns || 0, 3);
+                            }
+                        });
+                    }
+                }
+            });
+        }
     }
 
     revealSubmarinesAround(x, y, range, ownerId) {
@@ -651,11 +688,11 @@ class GameRoom {
         // Reduce active effects
         if (player.activeEffects.jammer > 0) player.activeEffects.jammer--;
         if (player.activeEffects.admiralVision > 0) player.activeEffects.admiralVision--;
-        if (player.activeEffects.whiteHat) {
-            player.activeEffects.whiteHat.turnsLeft--;
-            if (player.activeEffects.whiteHat.turnsLeft <= 0) {
-                player.activeEffects.whiteHat = null;
-            }
+        // Update white hats array (decrement turns and remove expired ones)
+        if (Array.isArray(player.activeEffects.whiteHat)) {
+            player.activeEffects.whiteHat = player.activeEffects.whiteHat
+                .map(wh => ({ ...wh, turnsLeft: wh.turnsLeft - 1 }))
+                .filter(wh => wh.turnsLeft > 0);
         }
 
         // Unit passives
