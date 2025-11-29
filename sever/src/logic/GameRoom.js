@@ -1100,15 +1100,22 @@ class GameRoom {
                     // 1. revealedTurns > 0 (đã bị reveal bởi items/actions/lighthouse)
                     // 2. HOẶC được detect bởi Destroyer có Sonar (chỉ cho SS)
                     
-                    // SS chỉ bị phát hiện bởi Destroyer có Sonar
+                    // SS chỉ bị phát hiện bởi Destroyer có RADAR item (hasRadar = true)
+                    // DD có hasSonar trong config nhưng cần RADAR item để kích hoạt
                     if (u.code === 'SS') {
                         for (const dd of myDestroyers) {
-                            if (!dd.definition?.hasSonar) continue;
-                            // Check if any cell of submarine is in vision range
+                            // Check if DD has RADAR item installed (hasRadar property)
+                            if (!dd.hasRadar || dd.radarRange <= 0) {
+                                console.log(`[getStateFor] DD ${dd.id} does not have RADAR (hasRadar: ${dd.hasRadar}, radarRange: ${dd.radarRange})`);
+                                continue;
+                            }
+                            console.log(`[getStateFor] Checking SS detection with DD ${dd.id} that has RADAR (range: ${dd.radarRange})`);
+                            
+                            // Check if any cell of submarine is within RADAR range (not vision range)
                             for (const subCell of u.cells) {
                                 const dist = this.chebyshevDistance(dd.x, dd.y, subCell.x, subCell.y);
-                                if (dist <= dd.vision + visionBonus) {
-                                    console.log(`[getStateFor] SS detected by Destroyer with Sonar at distance ${dist}`);
+                                if (dist <= dd.radarRange) {
+                                    console.log(`[getStateFor] SS detected by Destroyer with RADAR at distance ${dist} (radarRange: ${dd.radarRange})`);
                                     return { 
                                         id: u.id,
                                         code: u.code, 
@@ -1125,7 +1132,7 @@ class GameRoom {
                             }
                         }
                         // SS not detected - return null (hidden)
-                        console.log(`[getStateFor] SS not detected, returning null`);
+                        console.log(`[getStateFor] SS not detected by any RADAR-equipped Destroyer, returning null`);
                         return null;
                     } else {
                         // Các ship stealth khác (BB, CV, DD, etc.) CHỈ hiển thị khi revealedTurns > 0
