@@ -14,6 +14,7 @@ module.exports = {
      * @returns {object} Kết quả hành động để gửi về client.
      */
     applyItem: (gameRoom, player, itemId, params) => {
+        console.log(`[ItemSystem] Player ${player.id} using item ${itemId} with params:`, params);
         const opponent = gameRoom.getOpponent(player.id);
         let result = {};
 

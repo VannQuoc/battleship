@@ -216,7 +216,12 @@ export const BattleScreen = () => {
   // --- Handlers ---
   const handleMapClick = useCallback(
     (x: number, y: number) => {
-      if (!isMyTurn) return;
+      console.log(`[BattleScreen] handleMapClick called with (${x}, ${y}), mode: ${mode}, isMyTurn: ${isMyTurn}`);
+      
+      if (!isMyTurn) {
+        console.log(`[BattleScreen] Not my turn, ignoring click`);
+        return;
+      }
 
       // SELECT mode - try to select own unit
       if (mode === 'SELECT') {
@@ -321,12 +326,23 @@ export const BattleScreen = () => {
 
       // ATTACK mode
       if (mode === 'ATTACK' && selectedUnitId) {
+        console.log(`[BattleScreen] ATTACK mode - Firing shot at (${x}, ${y}) with unit ${selectedUnitId}`);
+        console.log(`[BattleScreen] Selected unit:`, selectedUnit);
+        console.log(`[BattleScreen] Map data at (${x}, ${y}):`, mapData[x]?.[y]);
+        
         if (selectedUnit?.code === 'DD') {
           const terrain = mapData[x]?.[y];
           if (terrain === TERRAIN.ISLAND) {
             toast('Cảnh báo: Đảo có thể chặn đạn bắn thẳng!', { icon: '⛰️' });
           }
         }
+        
+        // Log all cells of selected unit for debugging
+        if (selectedUnit?.cells) {
+          console.log(`[BattleScreen] Firing unit cells:`, selectedUnit.cells.map(c => `(${c.x}, ${c.y})`).join(', '));
+        }
+        
+        console.log(`[BattleScreen] Calling fireShot(${x}, ${y}, ${selectedUnitId})`);
         fireShot(x, y, selectedUnitId);
         setMode('SELECT');
         setSelectedUnitId(null);
@@ -845,14 +861,14 @@ export const BattleScreen = () => {
             </div>
           </div>
 
-          {/* Unit Action Panel */}
+          {/* Unit Action Panel - only show in SELECT mode to avoid blocking cells */}
           <AnimatePresence>
-          {selectedUnit && isMyTurn && (
+          {selectedUnit && isMyTurn && mode === 'SELECT' && (
               <motion.div
-                initial={{ y: 100, opacity: 0 }}
+                initial={{ y: -100, opacity: 0 }}
                 animate={{ y: 0, opacity: 1 }}
-                exit={{ y: 100, opacity: 0 }}
-                className="absolute bottom-8 bg-slate-900/95 backdrop-blur-xl border border-cyan-500/30 rounded-2xl shadow-2xl shadow-cyan-500/10 z-30"
+                exit={{ y: -100, opacity: 0 }}
+                className="absolute top-4 left-1/2 -translate-x-1/2 bg-slate-900/95 backdrop-blur-xl border border-cyan-500/30 rounded-2xl shadow-2xl shadow-cyan-500/10 z-20 pointer-events-auto"
               >
                 <div className="p-4 flex items-center gap-6">
                   <div className="border-r border-slate-700 pr-6">
@@ -881,7 +897,10 @@ export const BattleScreen = () => {
                   <div className="flex gap-3">
                     {selectedUnit.type !== 'STRUCTURE' && (
                       <button
-                        onClick={() => setMode('MOVE')}
+                        onClick={() => {
+                          setMode('MOVE');
+                          // Panel will auto-hide because mode !== 'SELECT'
+                        }}
                         disabled={selectedUnit.isImmobilized}
                         className={clsx(
                           'flex flex-col items-center gap-1 px-6 py-3 rounded-xl border transition-all',
@@ -898,7 +917,10 @@ export const BattleScreen = () => {
 
                     {selectedUnit.type !== 'STRUCTURE' && (
                       <button
-                        onClick={() => setMode('ATTACK')}
+                        onClick={() => {
+                          setMode('ATTACK');
+                          // Panel will auto-hide because mode !== 'SELECT'
+                        }}
                         className={clsx(
                           'flex flex-col items-center gap-1 px-6 py-3 rounded-xl border transition-all',
                           mode === 'ATTACK'
@@ -923,8 +945,13 @@ export const BattleScreen = () => {
                   </div>
 
                   <button
-                    onClick={cancelAction}
+                    onClick={() => {
+                      setMode('SELECT');
+                      setSelectedUnitId(null);
+                      setSelectedItem(null);
+                    }}
                     className="absolute top-2 right-2 text-slate-500 hover:text-white"
+                    title="Đóng"
                   >
                     <X className="w-5 h-5" />
                   </button>
@@ -968,12 +995,13 @@ export const BattleScreen = () => {
             )}
           </AnimatePresence>
 
-          {/* Mode Indicator */}
+          {/* Mode Indicator - positioned outside map area using fixed positioning to avoid blocking cells */}
           {mode !== 'SELECT' && (
             <motion.div
               initial={{ y: -20, opacity: 0 }}
               animate={{ y: 0, opacity: 1 }}
-              className="absolute top-4 left-1/2 -translate-x-1/2 bg-slate-800/90 backdrop-blur px-6 py-3 rounded-xl border border-slate-700 flex items-center gap-3 z-30"
+              exit={{ y: -20, opacity: 0 }}
+              className="fixed top-20 left-1/2 -translate-x-1/2 bg-slate-800/90 backdrop-blur px-6 py-3 rounded-xl border border-slate-700 flex items-center gap-3 z-30 pointer-events-auto shadow-xl"
             >
               {mode === 'MOVE' && (
                 <>
@@ -1091,15 +1119,15 @@ export const BattleScreen = () => {
             </motion.div>
           )}
 
-          {/* Hover Info */}
+          {/* Hover Info - moved to fixed position outside map */}
           {hoverCell && (
-            <div className="absolute top-4 right-4 bg-slate-800/90 backdrop-blur px-3 py-2 rounded-lg text-xs font-mono z-20">
+            <div className="fixed top-4 right-4 bg-slate-800/90 backdrop-blur px-3 py-2 rounded-lg text-xs font-mono z-20 pointer-events-none">
               ({hoverCell.x}, {hoverCell.y})
             </div>
           )}
 
           {mode === 'SELECT' && !selectedUnit && isMyTurn && (
-            <div className="absolute bottom-8 text-slate-500 text-sm font-mono bg-slate-900/80 px-4 py-2 rounded-lg">
+            <div className="absolute bottom-8 left-1/2 -translate-x-1/2 text-slate-500 text-sm font-mono bg-slate-900/80 px-4 py-2 rounded-lg pointer-events-none">
               Chọn đơn vị trên bản đồ để ra lệnh...
             </div>
           )}

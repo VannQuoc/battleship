@@ -92,13 +92,15 @@ const Cell = memo(function Cell({
     content = <span className="text-[10px] opacity-40">🌀</span>;
   }
 
-  // Fog overlay
-  const fogClass = !isVisible && !isDeployMode ? 'brightness-[0.15] grayscale' : '';
+  // Fog overlay (but shot markers should always be visible)
+  const fogClass = !isVisible && !isDeployMode && !shotMarker ? 'brightness-[0.15] grayscale' : '';
   const shotOverlayClass = shotMarker
     ? shotMarker.isCooldown
       ? 'bg-red-500/50 border border-red-300 animate-pulse'
       : shotMarker.result === 'MISS'
       ? 'bg-yellow-500/30 border border-yellow-400'
+      : shotMarker.result === 'HIT'
+      ? 'bg-red-500/30 border border-red-500'
       : 'bg-red-500/30 border border-red-500'
     : '';
 
@@ -121,23 +123,27 @@ const Cell = memo(function Cell({
       style={{ width: CELL_SIZE, height: CELL_SIZE }}
     >
       {content}
+      {/* Shot markers - always visible regardless of fog of war */}
       {shotMarker && (
         <>
           <div
             className={clsx(
-              'absolute inset-0 pointer-events-none rounded-sm',
+              'absolute inset-0 pointer-events-none rounded-sm z-10',
               shotOverlayClass
             )}
-            title={`Bạn đã bắn: ${shotMarker.result === 'MISS' ? 'Trượt' : shotMarker.result === 'HIT' ? 'Trúng' : shotMarker.result}`}
+            title={`Bạn đã bắn: ${shotMarker.result === 'MISS' ? 'Trượt' : shotMarker.result === 'HIT' ? 'Trúng' : shotMarker.result}${shotMarker.isCooldown ? ' (Đang cooldown)' : ''}`}
           />
           {shotMarker.result === 'MISS' && (
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <span className="text-yellow-400 text-xs font-bold">○</span>
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
+              <span className="text-yellow-400 text-xs font-bold drop-shadow-lg">○</span>
             </div>
           )}
-          {shotMarker.result === 'HIT' && !shotMarker.isCooldown && (
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <span className="text-red-500 text-sm font-bold">✖</span>
+          {shotMarker.result === 'HIT' && (
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
+              <span className={clsx(
+                'text-red-500 text-sm font-bold drop-shadow-lg',
+                shotMarker.isCooldown && 'animate-pulse'
+              )}>✖</span>
             </div>
           )}
         </>
@@ -238,8 +244,13 @@ export const GameMap = ({
       }
     });
 
+    // Always show cells with shot markers (so they're visible even in fog of war)
+    shotMarkers?.forEach((marker) => {
+      visible.add(`${marker.x},${marker.y}`);
+    });
+
     return visible;
-  }, [myFleet, mapSize]);
+  }, [myFleet, mapSize, shotMarkers]);
 
   // Filter opponent units based on actual visibility (extra safety)
   const opponentFleet = useMemo(() => {
@@ -277,7 +288,9 @@ export const GameMap = ({
   // --- Click Handler ---
   const handleCellClick = useCallback(
     (x: number, y: number) => {
+      console.log(`[GameMap] Cell clicked at (${x}, ${y})`);
       if (interactive && onCellClick) {
+        console.log(`[GameMap] Calling onCellClick with (${x}, ${y})`);
         onCellClick(x, y);
       }
     },
@@ -297,12 +310,49 @@ export const GameMap = ({
 
   // --- Unit Click Handler ---
   const handleUnitClick = useCallback(
-    (unit: Unit) => {
-      if (interactive && onCellClick) {
-        onCellClick(unit.x, unit.y);
+    (unit: Unit, event?: React.MouseEvent) => {
+      if (!interactive || !onCellClick) return;
+      
+      // In ATTACK mode, clicking on unit should fire at the specific cell clicked, not unit position
+      if (event && hoverMode === 'attack') {
+        // Calculate which cell was actually clicked
+        const target = event.currentTarget as HTMLElement;
+        const gridContainer = target.closest('[style*="grid"]') as HTMLElement;
+        if (gridContainer) {
+          const rect = gridContainer.getBoundingClientRect();
+          const clickX = event.clientX - rect.left;
+          const clickY = event.clientY - rect.top;
+          
+          // Account for padding (inset-1 = 4px)
+          const padding = 4;
+          const adjustedX = clickX - padding;
+          const adjustedY = clickY - padding;
+          
+          // Calculate which cell was clicked based on grid position
+          // CELL_SIZE + 1 for gap between cells
+          const cellX = Math.floor(adjustedY / (CELL_SIZE + 1));
+          const cellY = Math.floor(adjustedX / (CELL_SIZE + 1));
+          
+          console.log(`[GameMap] Unit clicked in ATTACK mode, calculated cell: (${cellX}, ${cellY}), unit position: (${unit.x}, ${unit.y})`);
+          console.log(`[GameMap] Click position: (${clickX}, ${clickY}), adjusted: (${adjustedX}, ${adjustedY})`);
+          
+          // Verify cell is within unit bounds
+          const isWithinUnit = unit.cells?.some(c => c.x === cellX && c.y === cellY);
+          if (isWithinUnit && cellX >= 0 && cellY >= 0 && cellX < mapSize && cellY < mapSize) {
+            console.log(`[GameMap] Using calculated cell (${cellX}, ${cellY}) for attack`);
+            onCellClick(cellX, cellY);
+            return;
+          } else {
+            console.warn(`[GameMap] Calculated cell (${cellX}, ${cellY}) not within unit bounds or out of map`);
+          }
+        }
       }
+      
+      // Fallback: use unit position (for SELECT mode or if calculation fails)
+      console.log(`[GameMap] Unit clicked, using unit position (${unit.x}, ${unit.y})`);
+      onCellClick(unit.x, unit.y);
     },
-    [interactive, onCellClick]
+    [interactive, onCellClick, hoverMode, mapSize]
   );
 
   return (
@@ -414,7 +464,7 @@ export const GameMap = ({
                 gridColumn: `${unit.y + 1} / span ${cols}`,
                 gridRow: `${unit.x + 1} / span ${rows}`,
               }}
-              onClick={() => handleUnitClick(unit)}
+              onClick={(e) => handleUnitClick(unit, e)}
             >
               <UnitRenderer
                 unit={unit}
@@ -441,7 +491,7 @@ export const GameMap = ({
                 gridColumn: `${unit.y + 1} / span ${cols}`,
                 gridRow: `${unit.x + 1} / span ${rows}`,
               }}
-              onClick={() => handleUnitClick(unit)}
+              onClick={(e) => handleUnitClick(unit, e)}
             >
               <UnitRenderer
                 unit={unit}

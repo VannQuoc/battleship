@@ -310,14 +310,24 @@ module.exports = (io) => {
         // =========================================================
 
         socket.on('fire_shot', ({ roomId, x, y, preferredUnitId }) => {
+            console.log(`[SocketHandler] fire_shot received: roomId=${roomId}, x=${x}, y=${y}, preferredUnitId=${preferredUnitId || 'none'}`);
+            
             const room = rooms[roomId];
-            if (!room) return;
+            if (!room) {
+                console.error(`[SocketHandler] Room ${roomId} not found`);
+                return;
+            }
 
             try {
                 const result = room.fireShot(socket.id, x, y, preferredUnitId);
                 
-                if (result.error) return socket.emit('error', result.error);
+                if (result.error) {
+                    console.log(`[SocketHandler] fire_shot error: ${result.error}`);
+                    return socket.emit('error', result.error);
+                }
 
+                console.log(`[SocketHandler] fire_shot result:`, result);
+                
                 io.to(roomId).emit('effect_trigger', { 
                     type: 'SHOT', 
                     attackerId: socket.id,
@@ -327,6 +337,7 @@ module.exports = (io) => {
 
                 if (result.gameEnded) {
                     const winner = room.players[result.winner];
+                    console.log(`[SocketHandler] Game ended, winner: ${winner?.name || 'Unknown'}`);
                     io.to(roomId).emit('game_over', { 
                         winnerId: result.winner,
                         winnerName: winner?.name || 'Unknown',
@@ -336,7 +347,7 @@ module.exports = (io) => {
 
                 syncRoom(io, room);
             } catch (e) {
-                console.error(e);
+                console.error(`[SocketHandler] fire_shot exception:`, e);
                 socket.emit('error', e.message);
             }
         });

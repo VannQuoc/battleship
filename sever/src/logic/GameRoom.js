@@ -297,6 +297,19 @@ class GameRoom {
             this.turnQueue = Object.keys(this.players);
             this.turnIndex = 0;
             this.logs.push({ type: 'GAME_START', msg: 'The battle begins!' });
+            
+            console.log(`[checkStartBattle] Battle started! Players: ${playerCount}, Turn queue:`, this.turnQueue);
+            
+            // Ensure all units start with revealedTurns = 0 (not revealed)
+            for (const pid in this.players) {
+                const player = this.players[pid];
+                player.fleet.forEach(unit => {
+                    if (!unit.revealedTurns) {
+                        unit.revealedTurns = 0;
+                    }
+                });
+            }
+            
             return true;
         }
         return false;
@@ -313,15 +326,34 @@ class GameRoom {
     }
 
     moveUnit(playerId, unitId, newX, newY) {
-        if (this.status !== 'BATTLE') throw new Error('Not in battle');
-        if (this.turnQueue[this.turnIndex] !== playerId) throw new Error('Not your turn');
+        console.log(`[MOVE_UNIT] Player ${playerId} moving unit ${unitId} to (${newX}, ${newY})`);
+        
+        if (this.status !== 'BATTLE') {
+            console.log(`[MOVE_UNIT] Error: Not in battle (status: ${this.status})`);
+            throw new Error('Not in battle');
+        }
+        if (this.turnQueue[this.turnIndex] !== playerId) {
+            console.log(`[MOVE_UNIT] Error: Not player's turn (current: ${this.turnQueue[this.turnIndex]}, expected: ${playerId})`);
+            throw new Error('Not your turn');
+        }
 
         const player = this.players[playerId];
         const unit = player.fleet.find(u => u.id === unitId);
 
-        if (!unit || unit.isSunk) throw new Error('Invalid Unit');
-        if (unit.isImmobilized) throw new Error('Engine Broken');
-        if (unit.type === 'STRUCTURE') throw new Error('Structures cannot move');
+        if (!unit || unit.isSunk) {
+            console.log(`[MOVE_UNIT] Error: Invalid unit (found: ${!!unit}, sunk: ${unit?.isSunk})`);
+            throw new Error('Invalid Unit');
+        }
+        if (unit.isImmobilized) {
+            console.log(`[MOVE_UNIT] Error: Unit ${unit.code} is immobilized`);
+            throw new Error('Engine Broken');
+        }
+        if (unit.type === 'STRUCTURE') {
+            console.log(`[MOVE_UNIT] Error: Cannot move structure`);
+            throw new Error('Structures cannot move');
+        }
+
+        console.log(`[MOVE_UNIT] Unit ${unit.code} at (${unit.x}, ${unit.y}), vertical: ${unit.vertical}, moveRange: ${unit.moveRange}`);
 
         // Movement restriction: Ships can only move along their axis
         // vertical ship (extending down) can only move vertically (change X)
@@ -329,18 +361,24 @@ class GameRoom {
         if (unit.vertical) {
             // Vertical ship - can only change X (move up/down), Y must stay same
             if (newY !== unit.y) {
+                console.log(`[MOVE_UNIT] Error: Vertical ship cannot change Y (${unit.y} -> ${newY})`);
                 throw new Error('Vertical ship can only move up/down');
             }
         } else {
             // Horizontal ship - can only change Y (move left/right), X must stay same
             if (newX !== unit.x) {
+                console.log(`[MOVE_UNIT] Error: Horizontal ship cannot change X (${unit.x} -> ${newX})`);
                 throw new Error('Horizontal ship can only move left/right');
             }
         }
 
         // Use Manhattan distance for movement (actual distance traveled)
         const dist = Math.abs(newX - unit.x) + Math.abs(newY - unit.y);
-        if (dist > unit.moveRange) throw new Error('Out of range');
+        console.log(`[MOVE_UNIT] Distance: ${dist}, maxRange: ${unit.moveRange}`);
+        if (dist > unit.moveRange) {
+            console.log(`[MOVE_UNIT] Error: Out of range (${dist} > ${unit.moveRange})`);
+            throw new Error('Out of range');
+        }
 
         const size = unit.definition.size;
         for(let i = 0; i < size; i++) {
@@ -412,8 +450,16 @@ class GameRoom {
     }
 
     fireShot(attackerId, x, y, preferredUnitId = null) {
-        if (this.status !== 'BATTLE') return { error: 'Not in battle' };
-        if (this.turnQueue[this.turnIndex] !== attackerId) return { error: 'Not your turn' };
+        console.log(`[FIRE_SHOT] Player ${attackerId} firing at (${x}, ${y}), preferredUnit: ${preferredUnitId || 'none'}`);
+        
+        if (this.status !== 'BATTLE') {
+            console.log(`[FIRE_SHOT] Error: Not in battle (status: ${this.status})`);
+            return { error: 'Not in battle' };
+        }
+        if (this.turnQueue[this.turnIndex] !== attackerId) {
+            console.log(`[FIRE_SHOT] Error: Not player's turn (current: ${this.turnQueue[this.turnIndex]}, expected: ${attackerId})`);
+            return { error: 'Not your turn' };
+        }
 
         const attacker = this.players[attackerId];
         let firingUnit = null;
@@ -421,11 +467,21 @@ class GameRoom {
         if (preferredUnitId) {
             const unit = attacker.fleet.find(unit => unit.id === preferredUnitId);
             if (unit && !unit.isSunk && (unit.type === 'SHIP' || unit.type === 'STRUCTURE')) {
-                // Use Manhattan distance for range check (actual movement distance)
-                const dist = Math.abs(unit.x - x) + Math.abs(unit.y - y);
-                const maxRange = this.getUnitRange(unit);
-                if (dist <= maxRange) {
+                // Check range using all cells of the unit (not just x, y)
+                let inRange = false;
+                for (const cell of unit.cells) {
+                    const dist = Math.abs(cell.x - x) + Math.abs(cell.y - y);
+                    const maxRange = this.getUnitRange(unit);
+                    if (dist <= maxRange) {
+                        inRange = true;
+                        break;
+                    }
+                }
+                if (inRange) {
                     firingUnit = unit;
+                    console.log(`[FIRE_SHOT] Using preferred unit ${unit.code} at (${unit.x}, ${unit.y})`);
+                } else {
+                    console.log(`[FIRE_SHOT] Preferred unit ${unit.code} out of range`);
                 }
             }
         }
@@ -433,21 +489,35 @@ class GameRoom {
         if (!firingUnit) {
             for (const unit of attacker.fleet) {
                 if (unit.isSunk || (unit.type !== 'SHIP' && unit.type !== 'STRUCTURE')) continue;
-                // Use Manhattan distance for range check (actual movement distance)
-                const dist = Math.abs(unit.x - x) + Math.abs(unit.y - y);
-                const maxRange = this.getUnitRange(unit);
-                if (dist <= maxRange) {
+                // Check range using all cells of the unit
+                let inRange = false;
+                for (const cell of unit.cells) {
+                    const dist = Math.abs(cell.x - x) + Math.abs(cell.y - y);
+                    const maxRange = this.getUnitRange(unit);
+                    if (dist <= maxRange) {
+                        inRange = true;
+                        break;
+                    }
+                }
+                if (inRange) {
                     firingUnit = unit;
+                    console.log(`[FIRE_SHOT] Auto-selected unit ${unit.code} at (${unit.x}, ${unit.y})`);
                     break; 
                 }
             }
         }
 
-        if (!firingUnit) return { error: 'No unit in range' };
+        if (!firingUnit) {
+            console.log(`[FIRE_SHOT] Error: No unit in range of (${x}, ${y})`);
+            return { error: 'No unit in range' };
+        }
 
         if (firingUnit.definition.trajectory === 'DIRECT') {
-            const isClear = this.checkLineOfSight(firingUnit.x, firingUnit.y, x, y);
+            // Check line of sight from firing unit's position to target
+            const firingCell = firingUnit.cells[0]; // Use first cell for LOS check
+            const isClear = this.checkLineOfSight(firingCell.x, firingCell.y, x, y);
             if (!isClear) {
+                console.log(`[FIRE_SHOT] Shot blocked by terrain from (${firingCell.x}, ${firingCell.y}) to (${x}, ${y})`);
                 this.nextTurn();
                 this.logs.push({ turn: this.logs.length, attacker: attackerId, unit: firingUnit.code, x, y, result: 'BLOCKED_TERRAIN' });
                 return { result: 'BLOCKED_TERRAIN', msg: 'Shot blocked by Island' };
@@ -457,6 +527,10 @@ class GameRoom {
         let finalResult = 'MISS';
         let sunkShipsList = [];
         let damage = firingUnit.definition.damage || 1;
+        let hitUnit = null;
+        let hitCell = null;
+
+        console.log(`[FIRE_SHOT] Checking for hits at (${x}, ${y}) with damage ${damage}`);
 
         // Check all opponents (prevent friendly fire)
         for (const pid in this.players) {
@@ -466,16 +540,24 @@ class GameRoom {
             for (const targetUnit of opponent.fleet) {
                 if (targetUnit.isSunk) continue;
                 
-                // Check if shot hits this unit
-                if (targetUnit.occupies(x, y)) {
+                // Check if shot hits any cell of this unit
+                const hitCellData = targetUnit.cells.find(cell => cell.x === x && cell.y === y);
+                if (hitCellData) {
+                    console.log(`[FIRE_SHOT] Hit detected! Target: ${targetUnit.code} (${targetUnit.id}), cell: (${x}, ${y}), HP before: ${targetUnit.hp}/${targetUnit.maxHp}`);
+                    
                     // CL cannot attack ships
                     if (firingUnit.code === 'CL' && targetUnit.type === 'SHIP') {
+                        console.log(`[FIRE_SHOT] CL cannot attack ships - NO_EFFECT`);
                         finalResult = 'NO_EFFECT';
                         continue;
                     }
 
                     // Apply damage with cooldown check
                     const status = targetUnit.takeDamage(damage, x, y, this.turnNumber || 0);
+                    console.log(`[FIRE_SHOT] Damage applied, status: ${status}, HP after: ${targetUnit.hp}/${targetUnit.maxHp}`);
+
+                    hitUnit = targetUnit;
+                    hitCell = { x, y };
 
                     if (status === 'HIT' || status === 'CRITICAL' || status === 'SUNK') {
                         finalResult = 'HIT';
@@ -483,9 +565,11 @@ class GameRoom {
                         if (status === 'SUNK') {
                             sunkShipsList.push(targetUnit.code);
                             attacker.points += 200;
+                            console.log(`[FIRE_SHOT] Unit ${targetUnit.code} SUNK!`);
                         }
                     } else if (status === 'CELL_ON_COOLDOWN') {
                         // Cell is on cooldown
+                        console.log(`[FIRE_SHOT] Cell (${x}, ${y}) on cooldown`);
                         if (finalResult === 'MISS') finalResult = 'CELL_COOLDOWN';
                     }
                     // Only one unit can be hit at a position
@@ -494,24 +578,33 @@ class GameRoom {
             }
         }
 
-        this.logs.push({ 
-            turn: this.logs.length, 
+        if (finalResult === 'MISS') {
+            console.log(`[FIRE_SHOT] Miss at (${x}, ${y})`);
+        }
+
+        const logEntry = { 
+            turn: this.turnNumber || this.logs.length, 
             attacker: attackerId, 
             unit: firingUnit.code,
             x, y, 
             result: finalResult, 
-            sunk: sunkShipsList 
-        });
+            sunk: sunkShipsList,
+            hitUnit: hitUnit ? { code: hitUnit.code, id: hitUnit.id, hp: hitUnit.hp, maxHp: hitUnit.maxHp } : null,
+            hitCell: hitCell
+        };
+        this.logs.push(logEntry);
+        console.log(`[FIRE_SHOT] Log entry:`, JSON.stringify(logEntry));
 
         // Check lighthouse detection when ship shoots
         this.checkLighthouseDetection(firingUnit.x, firingUnit.y, attackerId);
 
         if (this.checkWinCondition()) {
+            console.log(`[FIRE_SHOT] Game ended! Winner: ${this.winner}`);
             return { result: finalResult, sunk: sunkShipsList, winner: this.winner, gameEnded: true };
         }
 
         this.nextTurn();
-        return { result: finalResult, sunk: sunkShipsList };
+        return { result: finalResult, sunk: sunkShipsList, hitUnit: hitUnit ? { code: hitUnit.code, hp: hitUnit.hp, maxHp: hitUnit.maxHp } : null };
     }
 
     getUnitRange(unit) {
@@ -855,10 +948,19 @@ class GameRoom {
 
     getStateFor(playerId, revealAll = false) {
         const me = this.players[playerId];
-        if (!me) return null;
+        if (!me) {
+            console.warn(`[getStateFor] Player ${playerId} not found`);
+            return null;
+        }
+        
+        if (revealAll) {
+            console.log(`[getStateFor] RevealAll mode for player ${playerId}`);
+        }
         
         const visionBonus = me.activeEffects.admiralVision > 0 ? 2 : 0;
         const myDestroyers = me.fleet.filter(u => u.code === 'DD' && !u.isSunk);
+        
+        console.log(`[getStateFor] Player ${playerId} has ${me.fleet.length} units, ${myDestroyers.length} destroyers, visionBonus: ${visionBonus}`);
 
         // Build opponents data (for multiplayer)
         const opponents = {};
@@ -991,66 +1093,73 @@ class GameRoom {
                 const unitDef = u.definition || UNITS[u.code];
                 const isStealth = unitDef?.isStealth !== undefined ? unitDef.isStealth : (u.type === 'SHIP');
                 
+                console.log(`[getStateFor] Checking visibility for ${u.code} (${u.id}), isStealth: ${isStealth}, revealedTurns: ${u.revealedTurns || 0}`);
+                
                 if (isStealth) {
-                    // Stealth units: chỉ bị phát hiện bởi Destroyer có Sonar (nếu là SS) hoặc bất kỳ ship nào (nếu không phải SS)
+                    // Stealth units: CHỈ hiển thị khi:
+                    // 1. revealedTurns > 0 (đã bị reveal bởi items/actions/lighthouse)
+                    // 2. HOẶC được detect bởi Destroyer có Sonar (chỉ cho SS)
+                    
+                    // SS chỉ bị phát hiện bởi Destroyer có Sonar
                     if (u.code === 'SS') {
-                        // Submarine chỉ bị phát hiện bởi Destroyer có Sonar
                         for (const dd of myDestroyers) {
                             if (!dd.definition?.hasSonar) continue;
-                            // Use Chebyshev distance for vision (square vision range)
-                            const dist = this.chebyshevDistance(dd.x, dd.y, u.x, u.y);
-                            if (dist <= dd.vision + visionBonus) {
-                                return { 
-                                    id: u.id,
-                                    code: u.code, 
-                                    x: u.x, 
-                                    y: u.y, 
-                                    vertical: u.vertical, 
-                                    isSunk: false,
-                                    cells: u.cells,
-                                    type: u.type
-                                };
+                            // Check if any cell of submarine is in vision range
+                            for (const subCell of u.cells) {
+                                const dist = this.chebyshevDistance(dd.x, dd.y, subCell.x, subCell.y);
+                                if (dist <= dd.vision + visionBonus) {
+                                    console.log(`[getStateFor] SS detected by Destroyer with Sonar at distance ${dist}`);
+                                    return { 
+                                        id: u.id,
+                                        code: u.code, 
+                                        x: u.x, 
+                                        y: u.y, 
+                                        vertical: u.vertical, 
+                                        isSunk: false,
+                                        hp: u.hp,
+                                        maxHp: u.maxHp,
+                                        cells: u.cells,
+                                        type: u.type
+                                    };
+                                }
                             }
                         }
+                        // SS not detected - return null (hidden)
+                        console.log(`[getStateFor] SS not detected, returning null`);
+                        return null;
                     } else {
-                        // Các ship stealth khác có thể bị phát hiện bởi bất kỳ ship nào trong tầm nhìn
-                        for (const myShip of me.fleet) {
-                            if (myShip.isSunk) continue;
-                            // Use Chebyshev distance for vision (square vision range)
-                            const dist = this.chebyshevDistance(myShip.x, myShip.y, u.x, u.y);
-                            if (dist <= myShip.vision + visionBonus) {
-                                return { 
-                                    id: u.id,
-                                    code: u.code, 
-                                    x: u.x, 
-                                    y: u.y, 
-                                    vertical: u.vertical, 
-                                    isSunk: false,
-                                    cells: u.cells,
-                                    type: u.type
-                                };
-                            }
-                        }
+                        // Các ship stealth khác (BB, CV, DD, etc.) CHỈ hiển thị khi revealedTurns > 0
+                        // KHÔNG bị phát hiện bởi vision thông thường
+                        console.log(`[getStateFor] Stealth ship ${u.code} not revealed (revealedTurns: ${u.revealedTurns || 0}), returning null`);
+                        return null;
                     }
                 } else {
                     // Non-stealth units: có thể bị phát hiện bởi bất kỳ ship nào trong tầm nhìn
                     for (const myShip of me.fleet) {
                         if (myShip.isSunk) continue;
-                        // Use Chebyshev distance for vision (square vision range)
-                        const dist = this.chebyshevDistance(myShip.x, myShip.y, u.x, u.y);
-                        if (dist <= myShip.vision + visionBonus) {
-                            return { 
-                                id: u.id,
-                                code: u.code, 
-                                x: u.x, 
-                                y: u.y, 
-                                vertical: u.vertical, 
-                                isSunk: false,
-                                cells: u.cells,
-                                type: u.type
-                            };
+                        // Check if any cell of enemy unit is in vision range
+                        for (const enemyCell of u.cells) {
+                            const dist = this.chebyshevDistance(myShip.x, myShip.y, enemyCell.x, enemyCell.y);
+                            if (dist <= myShip.vision + visionBonus) {
+                                console.log(`[getStateFor] Non-stealth unit ${u.code} detected by vision at distance ${dist}`);
+                                return { 
+                                    id: u.id,
+                                    code: u.code, 
+                                    x: u.x, 
+                                    y: u.y, 
+                                    vertical: u.vertical, 
+                                    isSunk: false,
+                                    hp: u.hp,
+                                    maxHp: u.maxHp,
+                                    cells: u.cells,
+                                    type: u.type
+                                };
+                            }
                         }
                     }
+                    // Non-stealth unit not in vision - return null
+                    console.log(`[getStateFor] Non-stealth unit ${u.code} not in vision, returning null`);
+                    return null;
                 }
                 
                 return null;

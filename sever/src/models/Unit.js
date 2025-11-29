@@ -76,50 +76,67 @@ class Unit {
    * @param {number} currentTurn - Lượt hiện tại (để check cooldown)
    */
   takeDamage(dmg = 1, atX = -1, atY = -1, currentTurn = 0) {
-    if (this.isSunk) return 'ALREADY_SUNK';
+    console.log(`[Unit.takeDamage] Unit ${this.code} (${this.id}) taking ${dmg} damage at (${atX}, ${atY}), currentTurn: ${currentTurn}, HP: ${this.hp}/${this.maxHp}`);
+    
+    if (this.isSunk) {
+      console.log(`[Unit.takeDamage] Unit already sunk`);
+      return 'ALREADY_SUNK';
+    }
 
     // If specific coordinates provided, check cell cooldown
     if (atX !== -1 && atY !== -1) {
       const cell = this.cells.find(c => c.x === atX && c.y === atY);
       
       if (cell) {
+        console.log(`[Unit.takeDamage] Found cell at (${atX}, ${atY}), hit: ${cell.hit}, hitTurn: ${cell.hitTurn}`);
+        
         if (cell.hit && cell.hitTurn >= 0) {
           // Cell đã bị hit - check cooldown
           const cooldownTurns = CONSTANTS.SHOT_COOLDOWN_TURNS || 2;
           const turnsSinceHit = currentTurn - cell.hitTurn;
+          console.log(`[Unit.takeDamage] Cell on cooldown check: turnsSinceHit=${turnsSinceHit}, cooldownTurns=${cooldownTurns}`);
+          
           if (turnsSinceHit < cooldownTurns) {
             // Chưa đủ cooldown - không gây damage
+            console.log(`[Unit.takeDamage] Cell on cooldown, returning CELL_ON_COOLDOWN`);
             return 'CELL_ON_COOLDOWN';
           }
           // Đã đủ cooldown - có thể bắn lại, reset hit state
+          console.log(`[Unit.takeDamage] Cooldown expired, resetting cell hit state`);
           cell.hit = false;
           cell.hitTurn = -1;
         }
         // Đánh dấu bộ phận này đã hỏng
         cell.hit = true;
         cell.hitTurn = currentTurn;
+        console.log(`[Unit.takeDamage] Cell marked as hit at turn ${currentTurn}`);
       } else {
-        // Cell not found - this shouldn't happen if coordinates are correct
-        // But still apply damage (fallback)
+        // Cell not found - log all cells for debugging
         console.warn(`[Unit.takeDamage] Cell not found at (${atX}, ${atY}) for unit ${this.id}`);
+        console.warn(`[Unit.takeDamage] Available cells:`, this.cells.map(c => `(${c.x}, ${c.y})`).join(', '));
       }
     }
 
     // Trừ HP tổng
+    const oldHp = this.hp;
     this.hp -= dmg;
+    console.log(`[Unit.takeDamage] HP: ${oldHp} -> ${this.hp} (max: ${this.maxHp})`);
 
     if (this.hp <= 0) {
       this.hp = 0;
       this.isSunk = true;
       this.isImmobilized = true;
+      console.log(`[Unit.takeDamage] Unit SUNK!`);
       return 'SUNK';
     }
     
     if (this.hp < this.maxHp * CONSTANTS.CRITICAL_THRESHOLD) {
       this.isImmobilized = true;
+      console.log(`[Unit.takeDamage] Unit CRITICAL (${this.hp}/${this.maxHp} < ${this.maxHp * CONSTANTS.CRITICAL_THRESHOLD})`);
       return 'CRITICAL';
     }
 
+    console.log(`[Unit.takeDamage] Unit HIT (${this.hp}/${this.maxHp})`);
     return 'HIT';
   }
 
