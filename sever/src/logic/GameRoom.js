@@ -102,10 +102,10 @@ class GameRoom {
     }
 
     // Add Player
-    addPlayer(id, name) {
+    addPlayer(id, name, persistentId = null) {
         if (Object.keys(this.players).length >= this.config.maxPlayers) return false;
 
-        const newPlayer = new Player(id, name);
+        const newPlayer = new Player(id, name, persistentId || id);
         newPlayer.points = this.config.startingPoints;
         newPlayer.activeEffects = { jammer: 0, admiralVision: 0 };
         newPlayer.buildingDiscount = 0; 
@@ -322,6 +322,84 @@ class GameRoom {
                 if (u.occupies(x, y)) return true;
             }
         }
+        return false;
+    }
+
+    /**
+     * Check if position is occupied by units that are visible to the player
+     * This prevents Fog of War leaks (e.g., detecting stealth submarines)
+     * @param {string} playerId - ID of player checking
+     * @param {number} x - X coordinate
+     * @param {number} y - Y coordinate
+     * @param {string} excludeUnitId - Unit ID to exclude from check
+     * @returns {boolean} - True if occupied by visible units
+     */
+    isOccupiedVisible(playerId, x, y, excludeUnitId = null) {
+        const player = this.players[playerId];
+        if (!player) return false;
+
+        // Always check friendly units (player can see their own units)
+        for (const u of player.fleet) {
+            if (u.id === excludeUnitId) continue;
+            if (u.occupies(x, y)) return true;
+        }
+
+        // For enemy units, only check if they are visible (not stealth or revealed)
+        for (const pid in this.players) {
+            if (pid === playerId) continue; // Skip own units (already checked)
+            const enemyPlayer = this.players[pid];
+            
+            for (const u of enemyPlayer.fleet) {
+                if (u.id === excludeUnitId) continue;
+                if (!u.occupies(x, y)) continue;
+
+                // Check if unit is visible to player
+                // Structures: visible if not stealth or alwaysVisible
+                if (u.type === 'STRUCTURE') {
+                    const isStealth = u.definition?.isStealth !== false;
+                    const alwaysVisible = u.definition?.alwaysVisible === true;
+                    if (isStealth && !alwaysVisible && u.revealedTurns <= 0) {
+                        // Stealth structure not revealed - don't count as occupied
+                        continue;
+                    }
+                }
+                
+                // Ships: only visible if revealed or detected
+                if (u.type === 'SHIP') {
+                    const isStealth = u.definition?.isStealth !== false;
+                    if (isStealth && u.revealedTurns <= 0) {
+                        // Stealth ship not revealed - don't count as occupied
+                        // Exception: SS can be detected by RADAR-equipped DD
+                        if (u.code === 'SS') {
+                            // Check if any friendly DD with RADAR can detect this SS
+                            let detected = false;
+                            const myDestroyers = player.fleet.filter(dd => dd.code === 'DD' && !dd.isSunk && dd.hasRadar && dd.radarRange > 0);
+                            for (const dd of myDestroyers) {
+                                for (const subCell of u.cells) {
+                                    const dist = this.chebyshevDistance(dd.x, dd.y, subCell.x, subCell.y);
+                                    if (dist <= dd.radarRange) {
+                                        detected = true;
+                                        break;
+                                    }
+                                }
+                                if (detected) break;
+                            }
+                            if (!detected) {
+                                // SS not detected - don't count as occupied
+                                continue;
+                            }
+                        } else {
+                            // Other stealth ships not revealed - don't count as occupied
+                            continue;
+                        }
+                    }
+                }
+
+                // Unit is visible - count as occupied
+                return true;
+            }
+        }
+
         return false;
     }
 
@@ -792,9 +870,16 @@ class GameRoom {
                 }
             }
             
-            if (this.isOccupied(cx, cy)) {
+            // Use isOccupiedVisible to prevent Fog of War leaks
+            // Only check occupied with units that player can see
+            // If there's a stealth unit (not visible), allow placement (no error)
+            if (this.isOccupiedVisible(playerId, cx, cy)) {
                 return { success: false, error: 'Position occupied' };
             }
+            
+            // Note: We don't check isOccupied() here because if there's a stealth unit
+            // that the player can't see, we allow the placement to prevent Fog of War leaks.
+            // The structure will be placed, but there may be a conflict (which is acceptable gameplay).
         }
         
         // Remove from inventory and create unit

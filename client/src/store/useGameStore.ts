@@ -57,6 +57,7 @@ interface GameStore {
   disconnect: () => void;
   createRoom: (name: string, roomId: string, config?: Partial<GameConfig>) => void;
   joinRoom: (name: string, roomId: string) => void;
+  getPersistentPlayerId: () => string;
   selectCommander: (commanderId: string) => void;
   buyItem: (itemId: string) => void;
   sellItem: (itemId: string) => void;
@@ -133,6 +134,39 @@ export const useGameStore = create<GameStore>((set, get) => {
       console.log('[CLIENT] Connected! Socket ID:', socket.id);
       set({ isConnected: true, playerId: socket.id });
       toast.success('Kết nối thành công!', { icon: '🔗' });
+      
+      // Try to reconnect to previous room if exists
+      const savedRoomId = localStorage.getItem('battleship_roomId');
+      const savedPlayerId = localStorage.getItem('battleship_persistentPlayerId');
+      const savedPlayerName = localStorage.getItem('battleship_playerName');
+      
+      if (savedRoomId && savedPlayerId && savedPlayerName) {
+        console.log('[CLIENT] Attempting to reconnect to room:', savedRoomId);
+        socket.emit('reconnect_player', {
+          persistentPlayerId: savedPlayerId,
+          roomId: savedRoomId,
+          playerName: savedPlayerName
+        });
+      }
+    });
+    
+    socket.on('reconnect_success', (data: { roomId: string; playerId: string; status: string }) => {
+      console.log('[CLIENT] Reconnect successful:', data);
+      set({
+        roomId: data.roomId,
+        playerId: data.playerId,
+        status: data.status as GameStatus,
+      });
+      toast.success('Đã kết nối lại thành công!', { icon: '🔄' });
+    });
+    
+    socket.on('reconnect_failed', (data: { error: string }) => {
+      console.log('[CLIENT] Reconnect failed:', data);
+      // Clear saved data if reconnect failed
+      localStorage.removeItem('battleship_roomId');
+      localStorage.removeItem('battleship_persistentPlayerId');
+      localStorage.removeItem('battleship_playerName');
+      toast.error(`Không thể kết nối lại: ${data.error}`, { icon: '❌' });
     });
 
     socket.on('disconnect', () => {
@@ -161,6 +195,11 @@ export const useGameStore = create<GameStore>((set, get) => {
         players: data.players || {},
         status: 'LOBBY',
       });
+      
+      // Save to localStorage for reconnection
+      const persistentId = get().getPersistentPlayerId();
+      localStorage.setItem('battleship_roomId', data.roomId);
+      
       toast.success(`Phòng ${data.roomId} đã tạo!`, { icon: '🎮' });
     });
 
@@ -180,6 +219,10 @@ export const useGameStore = create<GameStore>((set, get) => {
         players: data.players || {},
         status: 'LOBBY',
       });
+      // Save to localStorage for reconnection
+      const persistentId = get().getPersistentPlayerId();
+      localStorage.setItem('battleship_roomId', data.roomId);
+      
       toast.success(`Đã tham gia phòng ${data.roomId}!`, { icon: '✅' });
     });
 
@@ -396,12 +439,25 @@ export const useGameStore = create<GameStore>((set, get) => {
   // ==========================================================
   // ROOM ACTIONS
   // ==========================================================
+  getPersistentPlayerId: () => {
+    let persistentId = localStorage.getItem('battleship_persistentPlayerId');
+    if (!persistentId) {
+      // Generate new persistent ID
+      persistentId = `player_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      localStorage.setItem('battleship_persistentPlayerId', persistentId);
+    }
+    return persistentId;
+  },
+
   createRoom: (name, roomId, config) => {
     const socket = get().socket;
     if (!socket) return;
+    const persistentId = get().getPersistentPlayerId();
+    localStorage.setItem('battleship_playerName', name);
     socket.emit('create_room', {
       name,
       roomId,
+      persistentPlayerId: persistentId,
       config: {
         mapSize: config?.mapSize || 30,
         points: config?.startingPoints || 3000,
@@ -413,7 +469,9 @@ export const useGameStore = create<GameStore>((set, get) => {
   joinRoom: (name, roomId) => {
     const socket = get().socket;
     if (!socket) return;
-    socket.emit('join_room', { name, roomId });
+    const persistentId = get().getPersistentPlayerId();
+    localStorage.setItem('battleship_playerName', name);
+    socket.emit('join_room', { name, roomId, persistentPlayerId: persistentId });
   },
 
   // ==========================================================

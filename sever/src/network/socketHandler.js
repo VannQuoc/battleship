@@ -60,15 +60,93 @@ function syncLobby(io, room) {
 }
 
 module.exports = (io) => {
+    // Map persistent player IDs to socket IDs for reconnection
+    const playerIdMap = {}; // persistentId -> socketId
+    const socketToPlayerId = {}; // socketId -> persistentId
+    
     io.on('connection', (socket) => {
         console.log(`Client connected: ${socket.id}`);
+        
+        // Handle reconnection attempt
+        socket.on('reconnect_player', ({ persistentPlayerId, roomId, playerName }) => {
+            console.log(`[RECONNECT] Attempting reconnect: persistentId=${persistentPlayerId}, roomId=${roomId}, socketId=${socket.id}`);
+            
+            const room = rooms[roomId];
+            if (!room) {
+                console.log(`[RECONNECT] Room ${roomId} not found`);
+                return socket.emit('reconnect_failed', { error: 'Room not found' });
+            }
+            
+            // Find player by persistent ID in room
+            let foundPlayer = null;
+            let oldSocketId = null;
+            
+            for (const [pid, player] of Object.entries(room.players)) {
+                // Check if this player's persistent ID matches
+                // We'll store persistentId in player object
+                if (player.persistentId === persistentPlayerId) {
+                    foundPlayer = player;
+                    oldSocketId = pid;
+                    break;
+                }
+            }
+            
+            if (!foundPlayer) {
+                console.log(`[RECONNECT] Player ${persistentPlayerId} not found in room ${roomId}`);
+                return socket.emit('reconnect_failed', { error: 'Player not found in room' });
+            }
+            
+            // Update mappings
+            const oldSocketIdInMap = playerIdMap[persistentPlayerId];
+            if (oldSocketIdInMap) {
+                delete socketToPlayerId[oldSocketIdInMap];
+            }
+            
+            playerIdMap[persistentPlayerId] = socket.id;
+            socketToPlayerId[socket.id] = persistentPlayerId;
+            
+            // Update player's socket ID in room
+            delete room.players[oldSocketId];
+            room.players[socket.id] = foundPlayer;
+            foundPlayer.id = socket.id; // Update player's ID
+            
+            // Update turn queue if needed
+            const turnIndex = room.turnQueue.indexOf(oldSocketId);
+            if (turnIndex !== -1) {
+                room.turnQueue[turnIndex] = socket.id;
+            }
+            
+            // Update host if needed
+            if (room.hostId === oldSocketId) {
+                room.hostId = socket.id;
+            }
+            
+            socket.join(roomId);
+            
+            console.log(`[RECONNECT] Successfully reconnected player ${persistentPlayerId} (old: ${oldSocketId}, new: ${socket.id})`);
+            
+            // Send current game state
+            if (room.status === 'BATTLE' || room.status === 'SETUP') {
+                socket.emit('game_state', room.getStateFor(socket.id, false));
+            } else {
+                syncLobby(io, room);
+            }
+            
+            socket.emit('reconnect_success', {
+                roomId,
+                playerId: socket.id,
+                status: room.status
+            });
+            
+            io.to(roomId).emit('room_log', `${foundPlayer.name} reconnected.`);
+        });
 
         // =========================================================
         // M1: ROOM & JOIN LOGIC
         // =========================================================
 
         // 1. Tạo Room
-        socket.on('create_room', ({ roomId, name, config = {} }) => {
+        socket.on('create_room', ({ roomId, name, config = {}, persistentPlayerId }) => {
             if (rooms[roomId]) return socket.emit('error', 'Room already exists');
             
             try {
@@ -83,7 +161,13 @@ module.exports = (io) => {
                 console.log('[CREATE ROOM] Final config:', finalConfig);
 
                 const room = new GameRoom(roomId, finalConfig);
-                room.addPlayer(socket.id, name);
+                room.addPlayer(socket.id, name, persistentPlayerId);
+                
+                // Store mapping for reconnection
+                if (persistentPlayerId) {
+                    playerIdMap[persistentPlayerId] = socket.id;
+                    socketToPlayerId[socket.id] = persistentPlayerId;
+                }
                 
                 rooms[roomId] = room;
                 socket.join(roomId);
@@ -109,16 +193,22 @@ module.exports = (io) => {
         });
 
         // 2. Tham gia Room
-        socket.on('join_room', ({ roomId, name }) => {
+        socket.on('join_room', ({ roomId, name, persistentPlayerId }) => {
             const room = rooms[roomId];
             if (!room) return socket.emit('error', 'Room not found');
             
             if (room.status !== 'LOBBY') {
                 return socket.emit('error', 'Game already started or room closed.');
             }
-
-            if (room.addPlayer(socket.id, name)) {
+            
+            if (room.addPlayer(socket.id, name, persistentPlayerId)) {
                 socket.join(roomId);
+                
+                // Store mapping for reconnection
+                if (persistentPlayerId) {
+                    playerIdMap[persistentPlayerId] = socket.id;
+                    socketToPlayerId[socket.id] = persistentPlayerId;
+                }
                 
                 io.to(roomId).emit('player_joined', { id: socket.id, name });
                 io.to(roomId).emit('room_log', `${name} joined.`);

@@ -1,9 +1,10 @@
 const { CONSTANTS, ITEMS, UNITS } = require('../config/definitions');
 
 class Player {
-  constructor(id, name) {
+  constructor(id, name, persistentId = null) {
     this.id = id;
     this.name = name;
+    this.persistentId = persistentId || id; // Persistent ID for reconnection
     this.ready = false;
     
     // Quản lý quân lực
