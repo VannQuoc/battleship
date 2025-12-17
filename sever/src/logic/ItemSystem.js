@@ -224,8 +224,8 @@ module.exports = {
                             const status = u.takeDamage(3);
                             hits.push({ unitId: u.id, status });
                             
-                            // Check lighthouse detection when kamikaze
-                            gameRoom.checkLighthouseDetection(u.x, u.y, opponent.id);
+                            // Check lighthouse detection when kamikaze - only reveal the hit ship
+                            gameRoom.checkLighthouseDetection(u.x, u.y, opponent.id, u.id);
                         }
                     });
                     
@@ -233,11 +233,9 @@ module.exports = {
                 }
                 break;
 
-            case 'NUKE': // Nổ Hạt Nhân (Khả năng 15x15, cần SILO)
+            case 'NUKE': // Nổ Hạt Nhân (Khả năng 15x15, không cần SILO nữa)
                 {
-                    const activeSilo = player.fleet.find(unit => unit.code === 'SILO' && !unit.isSunk && unit.chargingTurns <= 0);
-           
-                    if (!activeSilo) throw new Error('Cần Bệ Phóng Hạt Nhân đã nạp đạn');
+                    // NUKE không cần SILO nữa, có thể sử dụng trực tiếp
                     
                     const radius = CONSTANTS.NUKE_RADIUS; // 7 = 15x15 area (7 ô mỗi bên từ tâm)
                     const centerX = params.x;
@@ -269,7 +267,6 @@ module.exports = {
                     }
                     
                     result = { type: 'NUKE_EXPLOSION', x: centerX, y: centerY, destroyed };
-                    activeSilo.chargingTurns = CONSTANTS.SILO_CHARGE_TURNS || 1;
                 }
                 break;
 

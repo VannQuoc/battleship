@@ -455,6 +455,18 @@ module.exports = (io) => {
             }
         });
 
+        socket.on('get_valid_move_positions', ({ roomId, unitId }) => {
+            const room = rooms[roomId];
+            if (!room) return;
+
+            try {
+                const positions = room.getValidMovePositions(socket.id, unitId);
+                socket.emit('valid_move_positions', { unitId, positions });
+            } catch (e) {
+                socket.emit('error', e.message);
+            }
+        });
+
         socket.on('use_item', ({ roomId, itemId, params }) => {
             const room = rooms[roomId];
             if (!room) return;

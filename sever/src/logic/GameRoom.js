@@ -47,27 +47,137 @@ class GameRoom {
         return base + (playerCount * perPlayer);
     }
 
-    // Map Generator
-    generateMap(size) {
-        const map = Array(size).fill().map(() => Array(size).fill(TERRAIN.WATER));
+    /**
+     * Get scaled value based on map size and player count
+     * Used for dynamic balancing
+     */
+    getScaledValue(baseKey, defaultValue, mapSize, playerCount) {
+        const baseValue = CONSTANTS[baseKey] || defaultValue;
+        // Scale based on map size (larger maps = longer spawn times, but not too much)
+        const mapScale = 1 + (mapSize - 20) * 0.05; // 5% per size above 20
+        // Scale based on player count (more players = slightly faster spawn)
+        const playerScale = 1 - (playerCount - 2) * 0.05; // 5% faster per extra player
+        return Math.max(1, Math.floor(baseValue * mapScale * playerScale));
+    }
+
+    /**
+     * Get scaled vision/range based on map size
+     */
+    getScaledVision(baseValue, mapSize) {
+        // Vision scales with map size: larger maps need better vision
+        const scale = 1 + (mapSize - 20) * 0.1; // 10% per size above 20
+        return Math.max(1, Math.floor(baseValue * scale));
+    }
+
+    /**
+     * Get scaled damage/reward based on map size and player count
+     */
+    getScaledReward(baseValue, mapSize, playerCount) {
+        // Larger maps and more players = more rewards
+        const mapScale = 1 + (mapSize - 20) * 0.1;
+        const playerScale = 1 + (playerCount - 2) * 0.2;
+        return Math.floor(baseValue * mapScale * playerScale);
+    }
+
+    // Map Generator with validation
+    generateMap(size, maxAttempts = 50) {
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+            const map = Array(size).fill().map(() => Array(size).fill(TERRAIN.WATER));
+            
+            // Random Islands (~5%)
+            const islandCount = Math.floor(size * size * 0.05);
+            for(let i = 0; i < islandCount; i++) {
+                const x = Math.floor(Math.random() * size);
+                const y = Math.floor(Math.random() * size);
+                map[x][y] = TERRAIN.ISLAND;
+            }
+
+            // Random Reefs (~3%)
+            const reefCount = Math.floor(size * size * 0.03);
+            for(let i = 0; i < reefCount; i++) {
+                const x = Math.floor(Math.random() * size);
+                const y = Math.floor(Math.random() * size);
+                if (map[x][y] === TERRAIN.WATER) map[x][y] = TERRAIN.REEF;
+            }
+
+            // Validate map can accommodate all required ships
+            if (this.validateMapForShips(map, size)) {
+                return map;
+            }
+        }
         
-        // Random Islands (~5%)
-        const islandCount = Math.floor(size * size * 0.05);
-        for(let i = 0; i < islandCount; i++) {
+        // If all attempts failed, return a map with minimal obstacles
+        console.warn(`[generateMap] Failed to generate valid map after ${maxAttempts} attempts, using minimal obstacles`);
+        const map = Array(size).fill().map(() => Array(size).fill(TERRAIN.WATER));
+        // Only add minimal obstacles
+        const minimalIslands = Math.floor(size * size * 0.02);
+        for(let i = 0; i < minimalIslands; i++) {
             const x = Math.floor(Math.random() * size);
             const y = Math.floor(Math.random() * size);
             map[x][y] = TERRAIN.ISLAND;
         }
-
-        // Random Reefs (~3%)
-        const reefCount = Math.floor(size * size * 0.03);
-        for(let i = 0; i < reefCount; i++) {
-            const x = Math.floor(Math.random() * size);
-            const y = Math.floor(Math.random() * size);
-            if (map[x][y] === TERRAIN.WATER) map[x][y] = TERRAIN.REEF;
-        }
-
         return map;
+    }
+
+    // Validate that map has enough space for all ship types
+    validateMapForShips(map, size) {
+        // Required ships: CV(5), BB(4), CL(3), DD(2), SS(3) = total 17 cells minimum
+        // We need at least enough water cells for all ships
+        const requiredShips = [
+            { code: 'CV', size: 5 },
+            { code: 'BB', size: 4 },
+            { code: 'CL', size: 3 },
+            { code: 'DD', size: 2 },
+            { code: 'SS', size: 3 }
+        ];
+        
+        const totalRequiredCells = requiredShips.reduce((sum, ship) => sum + ship.size, 0);
+        let waterCells = 0;
+        
+        for (let x = 0; x < size; x++) {
+            for (let y = 0; y < size; y++) {
+                if (map[x][y] === TERRAIN.WATER) {
+                    waterCells++;
+                }
+            }
+        }
+        
+        // Need at least 2x the required cells to account for placement constraints
+        if (waterCells < totalRequiredCells * 2) {
+            return false;
+        }
+        
+        // Try to find valid placements for each ship type
+        for (const ship of requiredShips) {
+            let foundPlacement = false;
+            // Try both vertical and horizontal orientations
+            for (const vertical of [true, false]) {
+                for (let x = 0; x < size; x++) {
+                    for (let y = 0; y < size; y++) {
+                        let valid = true;
+                        for (let i = 0; i < ship.size; i++) {
+                            const cx = vertical ? x + i : x;
+                            const cy = vertical ? y : y + i;
+                            if (cx >= size || cy >= size || map[cx][cy] !== TERRAIN.WATER) {
+                                valid = false;
+                                break;
+                            }
+                        }
+                        if (valid) {
+                            foundPlacement = true;
+                            break;
+                        }
+                    }
+                    if (foundPlacement) break;
+                }
+                if (foundPlacement) break;
+            }
+            if (!foundPlacement) {
+                return false;
+            }
+        }
+        
+        return true;
     }
 
     // Bresenham Line of Sight
@@ -450,15 +560,24 @@ class GameRoom {
             }
         }
 
-        // Use Manhattan distance for movement (actual distance traveled)
-        const dist = Math.abs(newX - unit.x) + Math.abs(newY - unit.y);
-        console.log(`[MOVE_UNIT] Distance: ${dist}, maxRange: ${unit.moveRange}`);
+        // Calculate movement distance considering ship length
+        // Movement distance = distance from old head to new head + ship length
+        // For vertical ship: head moves in X direction, so distance = |newX - oldX| + size
+        // For horizontal ship: head moves in Y direction, so distance = |newY - oldY| + size
+        const size = unit.definition.size;
+        let dist;
+        if (unit.vertical) {
+            // Vertical ship moves along X axis
+            dist = Math.abs(newX - unit.x) + size;
+        } else {
+            // Horizontal ship moves along Y axis
+            dist = Math.abs(newY - unit.y) + size;
+        }
+        console.log(`[MOVE_UNIT] Distance: ${dist} (including ship length ${size}), maxRange: ${unit.moveRange}`);
         if (dist > unit.moveRange) {
             console.log(`[MOVE_UNIT] Error: Out of range (${dist} > ${unit.moveRange})`);
             throw new Error('Out of range');
         }
-
-        const size = unit.definition.size;
         for(let i = 0; i < size; i++) {
             const cx = unit.vertical ? newX + i : newX;
             const cy = unit.vertical ? newY : newY + i;
@@ -483,8 +602,8 @@ class GameRoom {
         unit.updateCells(newX, newY, unit.vertical);
         this.logs.push({ action: 'MOVE', playerId, unitId, from: {x: oldX, y: oldY}, to: {x: newX, y: newY} });
         
-        // Check lighthouse detection when ship moves
-        this.checkLighthouseDetection(newX, newY, playerId);
+        // Check lighthouse detection when ship moves - only reveal the moving ship
+        this.checkLighthouseDetection(newX, newY, playerId, unitId);
         
         this.nextTurn();
         return { success: true };
@@ -639,11 +758,14 @@ class GameRoom {
 
                     if (status === 'HIT' || status === 'CRITICAL' || status === 'SUNK') {
                         finalResult = 'HIT';
-                        attacker.points += 50;
+                        // Dynamic reward based on map size and player count
+                        const hitReward = this.getScaledReward(50, this.config.mapSize, Object.keys(this.players).length);
+                        attacker.points += hitReward;
                         if (status === 'SUNK') {
                             sunkShipsList.push(targetUnit.code);
-                            attacker.points += 200;
-                            console.log(`[FIRE_SHOT] Unit ${targetUnit.code} SUNK!`);
+                            const sinkReward = this.getScaledReward(200, this.config.mapSize, Object.keys(this.players).length);
+                            attacker.points += sinkReward;
+                            console.log(`[FIRE_SHOT] Unit ${targetUnit.code} SUNK! Reward: ${hitReward + sinkReward}`);
                         }
                     } else if (status === 'CELL_ON_COOLDOWN') {
                         // Cell is on cooldown
@@ -673,8 +795,8 @@ class GameRoom {
         this.logs.push(logEntry);
         console.log(`[FIRE_SHOT] Log entry:`, JSON.stringify(logEntry));
 
-        // Check lighthouse detection when ship shoots
-        this.checkLighthouseDetection(firingUnit.x, firingUnit.y, attackerId);
+        // Check lighthouse detection when ship shoots - only reveal the shooting ship
+        this.checkLighthouseDetection(firingUnit.x, firingUnit.y, attackerId, firingUnit.id);
 
         if (this.checkWinCondition()) {
             console.log(`[FIRE_SHOT] Game ended! Winner: ${this.winner}`);
@@ -683,6 +805,105 @@ class GameRoom {
 
         this.nextTurn();
         return { result: finalResult, sunk: sunkShipsList, hitUnit: hitUnit ? { code: hitUnit.code, hp: hitUnit.hp, maxHp: hitUnit.maxHp } : null };
+    }
+
+    /**
+     * Get all valid move positions for a unit (like chess piece movement display)
+     * Returns array of {x, y} positions the unit can move to
+     */
+    getValidMovePositions(playerId, unitId) {
+        const player = this.players[playerId];
+        if (!player) return [];
+        
+        const unit = player.fleet.find(u => u.id === unitId);
+        if (!unit || unit.isSunk || unit.type === 'STRUCTURE' || unit.isImmobilized) return [];
+
+        const validPositions = [];
+        const size = unit.definition.size;
+        const maxRange = unit.moveRange;
+
+        // Try all possible positions within range
+        if (unit.vertical) {
+            // Vertical ship can only move along X axis
+            for (let newX = Math.max(0, unit.x - maxRange); newX <= Math.min(this.config.mapSize - size, unit.x + maxRange); newX++) {
+                if (newX === unit.x) continue; // Skip current position
+                const newY = unit.y;
+                
+                // Check if movement distance is valid (including ship length)
+                const dist = Math.abs(newX - unit.x) + size;
+                if (dist > maxRange) continue;
+
+                // Check if all cells are valid
+                let valid = true;
+                for (let i = 0; i < size; i++) {
+                    const cx = newX + i;
+                    const cy = newY;
+                    if (cx >= this.config.mapSize || cy >= this.config.mapSize || cx < 0 || cy < 0) {
+                        valid = false;
+                        break;
+                    }
+                    if (this.isOccupied(cx, cy, unit.id)) {
+                        valid = false;
+                        break;
+                    }
+                    const terrain = this.mapData[cx][cy];
+                    if (terrain === TERRAIN.ISLAND) {
+                        valid = false;
+                        break;
+                    }
+                    if (terrain === TERRAIN.REEF) {
+                        if (size >= 4 || unit.code === 'SS') {
+                            valid = false;
+                            break;
+                        }
+                    }
+                }
+                if (valid) {
+                    validPositions.push({ x: newX, y: newY });
+                }
+            }
+        } else {
+            // Horizontal ship can only move along Y axis
+            for (let newY = Math.max(0, unit.y - maxRange); newY <= Math.min(this.config.mapSize - size, unit.y + maxRange); newY++) {
+                if (newY === unit.y) continue; // Skip current position
+                const newX = unit.x;
+                
+                // Check if movement distance is valid (including ship length)
+                const dist = Math.abs(newY - unit.y) + size;
+                if (dist > maxRange) continue;
+
+                // Check if all cells are valid
+                let valid = true;
+                for (let i = 0; i < size; i++) {
+                    const cx = newX;
+                    const cy = newY + i;
+                    if (cx >= this.config.mapSize || cy >= this.config.mapSize || cx < 0 || cy < 0) {
+                        valid = false;
+                        break;
+                    }
+                    if (this.isOccupied(cx, cy, unit.id)) {
+                        valid = false;
+                        break;
+                    }
+                    const terrain = this.mapData[cx][cy];
+                    if (terrain === TERRAIN.ISLAND) {
+                        valid = false;
+                        break;
+                    }
+                    if (terrain === TERRAIN.REEF) {
+                        if (size >= 4 || unit.code === 'SS') {
+                            valid = false;
+                            break;
+                        }
+                    }
+                }
+                if (valid) {
+                    validPositions.push({ x: newX, y: newY });
+                }
+            }
+        }
+
+        return validPositions;
     }
 
     getUnitRange(unit) {
@@ -696,11 +917,19 @@ class GameRoom {
         if (unit.definition.range !== undefined && unit.definition.range === -1) {
             return 999; // Infinite range (CV)
         }
-        if (unit.definition.rangeFactor) {
-            return Math.floor(this.config.mapSize * unit.definition.rangeFactor);
+        
+        // Apply fog effect if active
+        let rangeModifier = 1;
+        if (unit.fogTurns > 0) {
+            rangeModifier = 0.5; // Reduce range by 50% in fog
         }
-        // Default range: vision + 2
-        return unit.vision + 2;
+        
+        if (unit.definition.rangeFactor) {
+            return Math.floor(this.config.mapSize * unit.definition.rangeFactor * rangeModifier);
+        }
+        // Default range: vision + 2 (scaled)
+        const baseRange = this.getScaledVision(unit.vision, this.config.mapSize) + 2;
+        return Math.floor(baseRange * rangeModifier);
     }
 
     checkWinCondition() {
@@ -739,9 +968,9 @@ class GameRoom {
 
     /**
      * Reveal ships near lighthouses when they perform actions (move, shoot, kamikaze)
-     * Only reveals ships that are active (performing the action), not all ships in range
+     * Only reveals the ship that performed the action, not all ships in range
      */
-    checkLighthouseDetection(unitX, unitY, ownerId) {
+    checkLighthouseDetection(unitX, unitY, ownerId, actingUnitId = null) {
         // Check all players' lighthouses
         for (const pid in this.players) {
             if (pid === ownerId) continue; // Don't reveal own ships to self
@@ -749,23 +978,26 @@ class GameRoom {
             player.fleet.forEach(lighthouse => {
                 if (lighthouse.isSunk || lighthouse.code !== 'LIGHTHOUSE') return;
                 
+                // Get dynamic vision range for lighthouse (scaled by map size)
+                const lighthouseVision = this.getScaledVision(lighthouse.vision || 3, this.config.mapSize);
+                
                 // Check if the action (at unitX, unitY) is within lighthouse vision
                 const dist = this.chebyshevDistance(lighthouse.x, lighthouse.y, unitX, unitY);
-                if (dist <= lighthouse.vision) {
-                    // Reveal the enemy player's ships that are in lighthouse range
+                if (dist <= lighthouseVision) {
+                    // Only reveal the ship that performed the action
                     const enemyPlayer = this.players[ownerId];
-                    if (enemyPlayer) {
-                        enemyPlayer.fleet.forEach(ship => {
-                            if (ship.isSunk || ship.type !== 'SHIP') return;
-                            // Check if any cell of ship is in lighthouse range
-                            for (const cell of ship.cells) {
+                    if (enemyPlayer && actingUnitId) {
+                        const actingShip = enemyPlayer.fleet.find(ship => ship.id === actingUnitId);
+                        if (actingShip && !actingShip.isSunk && actingShip.type === 'SHIP') {
+                            // Check if the acting ship is in lighthouse range
+                            for (const cell of actingShip.cells) {
                                 const shipDist = this.chebyshevDistance(lighthouse.x, lighthouse.y, cell.x, cell.y);
-                                if (shipDist <= lighthouse.vision) {
-                                    ship.revealedTurns = Math.max(ship.revealedTurns || 0, 3);
+                                if (shipDist <= lighthouseVision) {
+                                    actingShip.revealedTurns = Math.max(actingShip.revealedTurns || 0, 3);
                                     break; // Only need to reveal once
                                 }
                             }
-                        });
+                        }
                     }
                 }
             });
@@ -945,6 +1177,9 @@ class GameRoom {
 
         if (!player) return;
 
+        // Process random events
+        this.processRandomEvents();
+
         // Reduce active effects
         if (player.activeEffects.jammer > 0) player.activeEffects.jammer--;
         if (player.activeEffects.admiralVision > 0) player.activeEffects.admiralVision--;
@@ -961,6 +1196,28 @@ class GameRoom {
             if (u.isSunk) return;
 
             if (u.code === 'SILO' && u.chargingTurns > 0) u.chargingTurns--;
+
+            // Reduce fog turns
+            if (u.fogTurns > 0) {
+                u.fogTurns--;
+                if (u.fogTurns === 0) {
+                    // Restore original vision (if it was reduced)
+                    // Note: This is a simple implementation, might need to track original vision
+                }
+            }
+
+            // CV (Carrier) generates planes
+            if (u.code === 'CV' && u.type === 'SHIP') {
+                u.turnCounter = (u.turnCounter || 0) + 1;
+                const spawnTurns = this.getScaledValue('CV_SPAWN_TURNS', 3, this.config.mapSize, Object.keys(this.players).length);
+                if (u.turnCounter >= spawnTurns) {
+                    const added = player.addItem('PLANE');
+                    if (added) {
+                        u.turnCounter = 0;
+                        this.logs.push({ action: 'PASSIVE_GENERATE', playerId: player.id, item: 'PLANE', source: 'CV' });
+                    }
+                }
+            }
 
             if (u.type !== 'STRUCTURE') return;
             u.turnCounter++;
@@ -990,7 +1247,7 @@ class GameRoom {
                 });
             }
 
-            if (u.code === 'NUCLEAR_PLANT' && u.turnCounter >= (CONSTANTS.NUCLEAR_PLANT_SPAWN_TURNS || 10)) {
+            if (u.code === 'NUCLEAR_PLANT' && u.turnCounter >= this.getScaledValue('NUCLEAR_PLANT_SPAWN_TURNS', 10, this.config.mapSize, Object.keys(this.players).length)) {
                 const added = player.addItem('NUKE');
                 if (added) {
                     u.turnCounter = 0;
@@ -998,7 +1255,7 @@ class GameRoom {
                 }
             }
             
-            if (u.code === 'AIRFIELD' && u.turnCounter >= (CONSTANTS.AIRFIELD_SPAWN_TURNS || 3)) {
+            if (u.code === 'AIRFIELD' && u.turnCounter >= this.getScaledValue('AIRFIELD_SPAWN_TURNS', 3, this.config.mapSize, Object.keys(this.players).length)) {
                 const added = player.addItem('PLANE');
                 if (added) {
                     u.turnCounter = 0;
@@ -1029,6 +1286,161 @@ class GameRoom {
             return true;
         });
         this.processRadars();
+    }
+
+    /**
+     * Process random events during battle
+     */
+    processRandomEvents() {
+        const playerCount = Object.keys(this.players).length;
+        const mapSize = this.config.mapSize;
+        
+        // Event chance increases with turn number and map size
+        const baseChance = 0.05; // 5% base chance per turn
+        const turnBonus = Math.min(this.turnNumber * 0.01, 0.1); // Up to 10% bonus from turns
+        const mapBonus = (mapSize - 20) * 0.005; // Larger maps = more events
+        const eventChance = Math.min(baseChance + turnBonus + mapBonus, 0.3); // Max 30% chance
+        
+        if (Math.random() < eventChance) {
+            const eventTypes = [
+                'STORM',      // Storm appears, reduces vision
+                'FOG',        // Fog appears, reduces range
+                'TREASURE',   // Treasure found, gives bonus points
+                'REPAIR',     // Repair event, heals all ships
+                'RADAR_JAM',  // Radar jam, disrupts all radars
+            ];
+            
+            const eventType = eventTypes[Math.floor(Math.random() * eventTypes.length)];
+            this.triggerRandomEvent(eventType);
+        }
+    }
+
+    /**
+     * Trigger a random event
+     */
+    triggerRandomEvent(eventType) {
+        const mapSize = this.config.mapSize;
+        const playerCount = Object.keys(this.players).length;
+        
+        switch (eventType) {
+            case 'STORM':
+                {
+                    // Create storm area (3x3 to 5x5 based on map size)
+                    const stormSize = Math.min(3 + Math.floor(mapSize / 20), 5);
+                    const centerX = Math.floor(Math.random() * mapSize);
+                    const centerY = Math.floor(Math.random() * mapSize);
+                    
+                    // Apply storm to area (reduce vision by 2)
+                    for (const pid in this.players) {
+                        const player = this.players[pid];
+                        player.fleet.forEach(unit => {
+                            if (unit.isSunk) return;
+                            for (const cell of unit.cells) {
+                                const dist = Math.max(Math.abs(cell.x - centerX), Math.abs(cell.y - centerY));
+                                if (dist <= stormSize) {
+                                    // Storm reduces vision temporarily
+                                    unit.vision = Math.max(1, unit.vision - 2);
+                                }
+                            }
+                        });
+                    }
+                    
+                    this.logs.push({ 
+                        type: 'EVENT', 
+                        event: 'STORM', 
+                        msg: `Bão xuất hiện tại (${centerX}, ${centerY})! Tầm nhìn giảm.`,
+                        x: centerX,
+                        y: centerY,
+                        size: stormSize
+                    });
+                }
+                break;
+                
+            case 'FOG':
+                {
+                    // Fog reduces attack range for all units
+                    for (const pid in this.players) {
+                        const player = this.players[pid];
+                        player.fleet.forEach(unit => {
+                            if (unit.isSunk) return;
+                            // Fog effect lasts 2 turns (stored in unit)
+                            unit.fogTurns = 2;
+                        });
+                    }
+                    
+                    this.logs.push({ 
+                        type: 'EVENT', 
+                        event: 'FOG', 
+                        msg: 'Sương mù bao phủ! Tầm bắn giảm trong 2 lượt.' 
+                    });
+                }
+                break;
+                
+            case 'TREASURE':
+                {
+                    // Random player finds treasure
+                    const playerIds = Object.keys(this.players);
+                    const luckyPlayer = this.players[playerIds[Math.floor(Math.random() * playerIds.length)]];
+                    const reward = this.getScaledReward(500, mapSize, playerCount);
+                    luckyPlayer.points += reward;
+                    
+                    this.logs.push({ 
+                        type: 'EVENT', 
+                        event: 'TREASURE', 
+                        msg: `${luckyPlayer.name} tìm thấy kho báu! +${reward} điểm.`,
+                        playerId: luckyPlayer.id,
+                        reward: reward
+                    });
+                }
+                break;
+                
+            case 'REPAIR':
+                {
+                    // All ships heal 20% HP
+                    for (const pid in this.players) {
+                        const player = this.players[pid];
+                        player.fleet.forEach(unit => {
+                            if (unit.isSunk || unit.type !== 'SHIP') return;
+                            const heal = Math.floor(unit.maxHp * 0.2);
+                            unit.hp = Math.min(unit.maxHp, unit.hp + heal);
+                            if (unit.hp > unit.maxHp * CONSTANTS.CRITICAL_THRESHOLD) {
+                                unit.isImmobilized = false;
+                            }
+                        });
+                    }
+                    
+                    this.logs.push({ 
+                        type: 'EVENT', 
+                        event: 'REPAIR', 
+                        msg: 'Sửa chữa khẩn cấp! Tất cả tàu hồi 20% HP.' 
+                    });
+                }
+                break;
+                
+            case 'RADAR_JAM':
+                {
+                    // Disrupt all radars
+                    const disrupted = [];
+                    for (const pid in this.players) {
+                        const player = this.players[pid];
+                        player.fleet.forEach(unit => {
+                            if (unit.hasRadar && !unit.isSunk) {
+                                unit.hasRadar = false;
+                                unit.radarRange = 0;
+                                disrupted.push(unit.id);
+                            }
+                        });
+                    }
+                    
+                    this.logs.push({ 
+                        type: 'EVENT', 
+                        event: 'RADAR_JAM', 
+                        msg: 'Nhiễu sóng toàn cầu! Tất cả radar bị vô hiệu hóa.',
+                        disrupted: disrupted.length
+                    });
+                }
+                break;
+        }
     }
 
     getStateFor(playerId, revealAll = false) {

@@ -251,7 +251,13 @@
       "name": "Đầu đạn HN",
       "type": "ACTIVE",
       "cost": 2000,
-      "reqSilo": true
+      "reqSilo": false
+    },
+    "PLANE": {
+      "id": "PLANE",
+      "name": "Máy Bay",
+      "type": "ACTIVE",
+      "cost": 0
     },
     "SELF_DESTRUCT": {
       "id": "SELF_DESTRUCT",
